@@ -1,3 +1,5 @@
+import { LocalePreference, SupportedLocale } from '../main/i18n';
+
 export interface TodoItem {
   id: string;
   text: string;
@@ -33,6 +35,7 @@ export interface AppSettings {
   showCodexUsage: boolean;
   windowOpacity: number;
   theme: ThemeMode;
+  language: LocalePreference;
   windowBounds?: WindowBoundsState;
   webdav: WebDavConfig;
 }
@@ -42,6 +45,7 @@ export interface AppState {
   settings: AppSettings;
   lastSyncTime?: string;
   syncMessage?: string;
+  resolvedLocale: SupportedLocale;
 }
 
 export interface SaveToastPayload {

@@ -3,6 +3,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
 import { TodoItem } from '../../shared/types';
+import { SupportedLocale, translate } from '../../main/i18n';
 import { CheckIcon, GripIcon, PencilIcon, TrashIcon } from './icons';
 
 interface Props {
@@ -10,9 +11,10 @@ interface Props {
   onToggle: (id: string, completed: boolean) => void;
   onDelete: (id: string) => void;
   onUpdateText: (id: string, text: string) => void;
+  locale: SupportedLocale;
 }
 
-export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText }: Props) {
+export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, locale }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const [isEditing, setIsEditing] = useState(false);
   const [draftText, setDraftText] = useState(task.text);
@@ -63,7 +65,7 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText }: Pro
       <button
         type="button"
         onClick={() => onToggle(task.id, !task.completed)}
-        title={task.completed ? '标记为未完成' : '标记为完成'}
+        title={translate(locale, task.completed ? 'task.markIncomplete' : 'task.markComplete')}
         className="grid h-[18px] w-[18px] flex-shrink-0 place-items-center self-center rounded-full border transition-all duration-200 hover:border-[var(--accent)]"
         style={{
           borderColor: task.completed ? 'var(--success)' : 'var(--line-strong)',
@@ -95,8 +97,8 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText }: Pro
               rows={2}
             />
             <div className="flex items-center gap-1.5">
-              <button className="btn-primary !px-2.5 !py-1 !text-[11px]" onClick={submitEdit} title="保存">
-                <CheckIcon size={12} /> 保存
+              <button className="btn-primary !px-2.5 !py-1 !text-[11px]" onClick={submitEdit} title={translate(locale, 'common.save')}>
+                <CheckIcon size={12} /> {translate(locale, 'common.save')}
               </button>
               <button
                 className="ghost-text !py-1 !text-[11px]"
@@ -104,16 +106,16 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText }: Pro
                   setDraftText(task.text);
                   setIsEditing(false);
                 }}
-                title="取消"
+                title={translate(locale, 'common.cancel')}
               >
-                取消
+                {translate(locale, 'common.cancel')}
               </button>
             </div>
           </div>
         ) : (
           <p
             onDoubleClick={() => setIsEditing(true)}
-            title="双击编辑"
+            title={translate(locale, 'task.doubleClickEdit')}
             className={`min-w-0 flex-1 cursor-text truncate text-[13px] leading-[18px] ${
               task.completed ? 'text-[var(--text-3)] line-through' : 'text-[var(--text)]'
             }`}
@@ -136,21 +138,21 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText }: Pro
             {...attributes}
             {...listeners}
             className="ghost-icon !h-7 !w-6 cursor-grab text-[var(--text-3)] hover:text-[var(--text)] active:cursor-grabbing"
-            title="拖拽排序"
+            title={translate(locale, 'task.dragSort')}
           >
             <GripIcon size={14} />
           </button>
           <button
             className="ghost-icon !h-7 !w-7 text-[var(--text-3)] hover:text-[var(--accent)]"
             onClick={() => setIsEditing(true)}
-            title="编辑待办"
+            title={translate(locale, 'task.edit')}
           >
             <PencilIcon size={13} />
           </button>
           <button
             className="ghost-icon danger !h-7 !w-7 text-[var(--text-3)]"
             onClick={() => onDelete(task.id)}
-            title="删除待办"
+            title={translate(locale, 'task.delete')}
           >
             <TrashIcon size={13} />
           </button>

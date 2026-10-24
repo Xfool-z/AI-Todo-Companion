@@ -1,8 +1,17 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, screen, Tray } from 'electron';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { AppSettings, AppState, CaptureResult, TodoItem, WebDavConfig, WindowBoundsState } from '../shared/types';
+import {
+  LocalizedMessage,
+  TranslationKey,
+  localizedErrorMessage,
+  normalizeLocalePreference,
+  resolveLocale,
+  translate
+} from './i18n';
 import { createTaskFromText } from './markdown';
 import { getCodexUsage } from './codexUsage';
 import { StorageService } from './storage';
@@ -16,9 +25,10 @@ let mainWindow: BrowserWindow | null = null;
 let settings: AppSettings;
 let tasks: TodoItem[] = [];
 let lastSyncTime: string | undefined;
-let syncMessage: string | undefined;
+let statusMessage: LocalizedMessage | undefined;
 let saveWindowBoundsTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
+let showWindowAfterBootstrap = false;
 
 const storage = new StorageService((nextTasks) => {
   tasks = normalizeTaskOrder(nextTasks);
@@ -29,10 +39,20 @@ const syncService = new WebDavSyncService(
   () => settings,
   (status) => {
     lastSyncTime = status.time;
-    syncMessage = status.message;
+    statusMessage = status.message;
     broadcastState();
-  }
+  },
+  () => getResolvedLocale()
 );
+
+function getResolvedLocale() {
+  const systemLocale = app.isReady() ? app.getLocale() : Intl.DateTimeFormat().resolvedOptions().locale;
+  return resolveLocale(settings?.language ?? 'system', systemLocale);
+}
+
+function t(key: TranslationKey, params?: Record<string, string | number>) {
+  return translate(getResolvedLocale(), key, params);
+}
 
 function mergeWebdav(prev: WebDavConfig, next?: Partial<WebDavConfig>): WebDavConfig {
   return {
@@ -107,7 +127,8 @@ function currentState(): AppState {
     tasks,
     settings,
     lastSyncTime,
-    syncMessage
+    syncMessage: statusMessage ? translate(getResolvedLocale(), statusMessage.key, statusMessage.params) : undefined,
+    resolvedLocale: getResolvedLocale()
   };
 }
 
@@ -119,12 +140,13 @@ function broadcastState() {
   mainWindow.webContents.send('state:updated', currentState());
 }
 
-async function persistTasksAndBroadcast(showToastText?: string, withSystemNotification = false) {
+async function persistTasksAndBroadcast(showToastKey?: TranslationKey, withSystemNotification = false) {
   tasks = normalizeTaskOrder(tasks);
   await storage.writeTasks(settings.todoFilePath, tasks);
   broadcastState();
 
-  if (showToastText) {
+  if (showToastKey) {
+    const showToastText = t(showToastKey);
     const at = new Date().toISOString();
     mainWindow?.webContents.send('task:saved-toast', { text: showToastText, at });
     if (withSystemNotification) {
@@ -173,9 +195,7 @@ async function setDesktopMouseThrough(nextValue: boolean, openSettingsAfterShow 
     }
   }
 
-  const text = nextValue
-    ? 'Desktop mode: mouse passthrough ON (tray or Ctrl+Shift+Z to disable)'
-    : 'Desktop mode: mouse passthrough OFF';
+  const text = t(nextValue ? 'desktop.mouseThroughOn' : 'desktop.mouseThroughOff');
   const at = new Date().toISOString();
   mainWindow?.webContents.send('task:saved-toast', { text, at });
   broadcastState();
@@ -227,18 +247,18 @@ function registerGlobalHotkey() {
   });
 
   if (!captureRegistered) {
-    syncMessage = `Global shortcut registration failed: ${settings.globalShortcut}`;
+    statusMessage = { key: 'hotkey.captureFailed', params: { shortcut: settings.globalShortcut } };
     broadcastState();
     return false;
   }
 
   if (!desktopInteractRegistered) {
-    syncMessage = `Passthrough toggle shortcut failed: ${DESKTOP_INTERACT_SHORTCUT}`;
+    statusMessage = { key: 'hotkey.passthroughFailed', params: { shortcut: DESKTOP_INTERACT_SHORTCUT } };
     broadcastState();
     return false;
   }
 
-  syncMessage = `Hotkeys active: ${settings.globalShortcut} (passthrough: Ctrl+Shift+Z)`;
+  statusMessage = { key: 'hotkey.active', params: { shortcut: settings.globalShortcut } };
   broadcastState();
   return true;
 }
@@ -329,21 +349,19 @@ function updateTrayMenu() {
 
   const trayMenu = Menu.buildFromTemplate([
     {
-      label: '\u663E\u793A\u7A97\u53E3',
+      label: t('tray.showWindow'),
       click: () => {
         void setDesktopMouseThrough(false);
       }
     },
     {
-      label: '\u6253\u5F00\u8BBE\u7F6E',
+      label: t('tray.openSettings'),
       click: () => {
         void setDesktopMouseThrough(false, true);
       }
     },
     {
-      label: settings.desktopMouseThrough
-        ? '\u5173\u95ED\u9F20\u6807\u7A7F\u900F'
-        : '\u5F00\u542F\u9F20\u6807\u7A7F\u900F',
+      label: t(settings.desktopMouseThrough ? 'tray.disableMouseThrough' : 'tray.enableMouseThrough'),
       enabled: settings.desktopPinned,
       click: () => {
         if (!settings.desktopPinned) {
@@ -356,7 +374,7 @@ function updateTrayMenu() {
       type: 'separator'
     },
     {
-      label: '\u9000\u51FA',
+      label: t('common.exit'),
       click: () => {
         app.quit();
       }
@@ -394,42 +412,42 @@ async function simulateCopyOnWindows() {
 }
 
 async function captureSelectedTextToTask(): Promise<CaptureResult> {
+  const previousClipboardText = await clipboard.readText();
+  const clipboardMarker = `__APEXTODO_CAPTURE_${randomUUID()}__`;
+
   try {
+    await clipboard.writeText(clipboardMarker);
     await simulateCopyOnWindows();
     await new Promise((resolve) => setTimeout(resolve, 180));
-    const text = clipboard.readText().trim();
+    const text = (await clipboard.readText()).trim();
 
-    if (!text) {
+    if (!text || text === clipboardMarker) {
       return {
         ok: false,
-        message: 'No selected text found'
+        message: t('task.noSelection')
       };
     }
 
     const task = createTaskFromText(text);
     tasks = [task, ...tasks];
-    await persistTasksAndBroadcast('Saved to top of todo list', true);
+    await persistTasksAndBroadcast('task.savedToTop', true);
 
     return {
       ok: true,
-      message: 'Saved'
+      message: t('task.saved')
     };
   } catch (error) {
     return {
       ok: false,
-      message: `Capture failed: ${(error as Error).message}`
+      message: t('task.captureFailed', { message: localizedErrorMessage(getResolvedLocale(), error) })
     };
+  } finally {
+    await clipboard.writeText(previousClipboardText);
   }
 }
 
 function shouldStartHidden() {
-  const hasHiddenArg = process.argv.includes('--hidden');
-  if (!hasHiddenArg) {
-    return false;
-  }
-
-  const loginInfo = app.getLoginItemSettings();
-  return Boolean(loginInfo.wasOpenedAtLogin || loginInfo.wasOpenedAsHidden);
+  return process.argv.includes('--hidden');
 }
 
 function getSafeWindowBounds() {
@@ -603,7 +621,7 @@ function createWindow(startHidden: boolean) {
 
 function setupIpcHandlers() {
   ipcMain.handle('app:get-state', async () => currentState());
-  ipcMain.handle('codex:get-usage', async () => getCodexUsage());
+  ipcMain.handle('codex:get-usage', async () => getCodexUsage(getResolvedLocale()));
   ipcMain.handle('window:minimize', () => {
     mainWindow?.minimize();
   });
@@ -645,7 +663,7 @@ function setupIpcHandlers() {
 
     const task = createTaskFromText(text);
     tasks = [task, ...tasks];
-    await persistTasksAndBroadcast('New task added', true);
+    await persistTasksAndBroadcast('task.added', true);
     return currentState();
   });
 
@@ -718,7 +736,7 @@ function setupIpcHandlers() {
     }
 
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: '\u9009\u62E9\u5F85\u529E\u6587\u4EF6\u5939',
+      title: t('dialog.selectTodoFolder'),
       properties: ['openDirectory', 'createDirectory']
     });
 
@@ -742,6 +760,7 @@ function setupIpcHandlers() {
     const normalizedWebdav = normalizeWebdavConfig(mergeWebdav(settings.webdav, partial.webdav));
     const normalizedShowCodexUsage =
       typeof partial.showCodexUsage === 'boolean' ? partial.showCodexUsage : settings.showCodexUsage;
+    const normalizedLanguage = normalizeLocalePreference(partial.language ?? settings.language);
 
     settings = {
       ...settings,
@@ -749,6 +768,7 @@ function setupIpcHandlers() {
       globalShortcut: normalizedShortcut,
       windowOpacity: normalizedOpacity,
       showCodexUsage: normalizedShowCodexUsage,
+      language: normalizedLanguage,
       webdav: normalizedWebdav
     };
 
@@ -786,11 +806,11 @@ function setupIpcHandlers() {
       broadcastState();
       return {
         ok: true,
-        message: '同步完成'
+        message: t('sync.completed')
       };
     } catch (error) {
-      const message = `同步失败：${(error as Error).message}`;
-      syncMessage = message;
+      const message = t('sync.failed', { message: localizedErrorMessage(getResolvedLocale(), error) });
+      statusMessage = { key: 'sync.failed', params: { message: localizedErrorMessage(getResolvedLocale(), error) } };
       broadcastState();
       return {
         ok: false,
@@ -808,6 +828,7 @@ async function bootstrap() {
   settings.desktopLockPosition = typeof settings.desktopLockPosition === 'boolean' ? settings.desktopLockPosition : true;
   settings.desktopMouseThrough = typeof settings.desktopMouseThrough === 'boolean' ? settings.desktopMouseThrough : false;
   settings.showCodexUsage = typeof settings.showCodexUsage === 'boolean' ? settings.showCodexUsage : false;
+  settings.language = normalizeLocalePreference(settings.language);
   settings.windowBounds = normalizeWindowBounds(settings.windowBounds) ?? undefined;
   if (settings.desktopPinned) {
     settings.alwaysOnTop = false;
@@ -822,13 +843,20 @@ async function bootstrap() {
 
   const startHidden = shouldStartHidden();
   createWindow(startHidden);
+  if (showWindowAfterBootstrap) {
+    showWindowAfterBootstrap = false;
+    showMainWindow();
+  }
   ensureTray();
   registerGlobalHotkey();
   syncService.start();
 
   if (settings.webdav.enabled) {
     void syncService.sync(settings.todoFilePath).catch((error) => {
-      syncMessage = `Startup sync failed: ${(error as Error).message}`;
+      statusMessage = {
+        key: 'sync.startupFailed',
+        params: { message: localizedErrorMessage(getResolvedLocale(), error) }
+      };
       broadcastState();
     });
   }
@@ -839,11 +867,23 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      showWindowAfterBootstrap = true;
+      return;
+    }
     showMainWindow();
   });
 
-  app.whenReady().then(() => {
-    void bootstrap();
+  void app.whenReady().then(async () => {
+    try {
+      await bootstrap();
+    } catch (error) {
+      const message = (error as Error).message || String(error);
+      console.error('ApexTodo 启动失败:', error);
+      dialog.showErrorBox(t('startup.failedTitle'), t('startup.failedBody', { message }));
+      app.quit();
+      return;
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

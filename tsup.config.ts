@@ -7,6 +7,7 @@ export default defineConfig((options) => ({
     markdown: 'src/main/markdown.ts',
     storage: 'src/main/storage.ts',
     sync: 'src/main/sync.ts',
+    i18n: 'src/main/i18n.ts',
     preload: 'src/preload/preload.ts'
   },
   // 主进程保持仅转译，不打包依赖，避免把 electron npm 包打进产物。

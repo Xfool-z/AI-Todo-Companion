@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CodexUsage, CodexUsageWindow } from '../shared/types';
+import { SupportedLocale, translate } from './i18n';
 
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const REQUEST_TIMEOUT_MS = 12_000;
@@ -104,7 +105,7 @@ async function fetchUsage(headers: Record<string, string>) {
   throw lastError;
 }
 
-export async function getCodexUsage(): Promise<CodexUsage> {
+export async function getCodexUsage(locale: SupportedLocale): Promise<CodexUsage> {
   const codexHome = process.env.CODEX_HOME?.trim() || path.join(os.homedir(), '.codex');
   const authPath = path.join(codexHome, 'auth.json');
 
@@ -113,12 +114,12 @@ export async function getCodexUsage(): Promise<CodexUsage> {
     auth = JSON.parse(await readFile(authPath, 'utf8')) as CodexAuthFile;
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    return unavailable(code === 'ENOENT' ? '未找到本机 Codex 登录信息' : '无法读取本机 Codex 登录信息');
+    return unavailable(translate(locale, code === 'ENOENT' ? 'usage.noAuth' : 'usage.readAuthFailed'));
   }
 
   const accessToken = auth.tokens?.access_token?.trim();
   if (!accessToken) {
-    return unavailable('当前 Codex 登录方式不支持读取套餐用量');
+    return unavailable(translate(locale, 'usage.unsupportedAuth'));
   }
 
   const headers: Record<string, string> = {
@@ -135,19 +136,19 @@ export async function getCodexUsage(): Promise<CodexUsage> {
     const response = await fetchUsage(headers);
 
     if (response.status === 401 || response.status === 403) {
-      return unavailable('Codex 登录已失效，请在 Codex 中重新登录');
+      return unavailable(translate(locale, 'usage.authExpired'));
     }
     if (!response.ok) {
       return {
         status: 'error',
-        message: `Codex 用量服务暂不可用（${response.status}）`
+        message: translate(locale, 'usage.serviceUnavailable', { status: response.status })
       };
     }
 
     const raw = (await response.json()) as RawUsageResponse;
     const { fiveHour, weekly } = resolveWindows(raw);
-    if (!fiveHour || !weekly) {
-      return unavailable('当前账户没有返回 5 小时或周用量窗口');
+    if (!fiveHour && !weekly) {
+      return unavailable(translate(locale, 'usage.missingWindows'));
     }
 
     return {
@@ -162,8 +163,8 @@ export async function getCodexUsage(): Promise<CodexUsage> {
       status: 'error',
       message:
         (error as Error).name === 'AbortError'
-          ? '读取 Codex 用量超时，请检查系统代理'
-          : '无法连接 Codex 用量服务，请检查系统代理'
+          ? translate(locale, 'usage.timeout')
+          : translate(locale, 'usage.connectionFailed')
     };
   }
 }

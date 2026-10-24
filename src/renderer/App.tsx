@@ -10,6 +10,14 @@ import {
 import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import dayjs from 'dayjs';
 import { AppSettings, AppState, CodexUsage, CodexUsageWindow, ThemeMode, TodoItem } from '../shared/types';
+import {
+  LocalePreference,
+  SupportedLocale,
+  TranslationKey,
+  TranslationParams,
+  resolveLocale,
+  translate
+} from '../main/i18n';
 import { SortableTaskItem } from './components/SortableTaskItem';
 import {
   ApexLogo,
@@ -38,6 +46,7 @@ const defaultSettings: AppSettings = {
   showCodexUsage: false,
   windowOpacity: 0.96,
   theme: 'light',
+  language: 'system',
   webdav: {
     enabled: false,
     url: '',
@@ -48,9 +57,9 @@ const defaultSettings: AppSettings = {
   }
 };
 
-function formatShortcutForDisplay(shortcut: string) {
+function formatShortcutForDisplay(shortcut: string, locale: SupportedLocale) {
   if (!shortcut) {
-    return '点击录制快捷键';
+    return translate(locale, 'shortcut.record');
   }
 
   return shortcut
@@ -115,11 +124,11 @@ function getTodoFolderPath(todoFilePath: string) {
   return todoFilePath.replace(/[\\/][^\\/]+$/, '');
 }
 
-function formatUsageReset(resetAt: string) {
-  return `${dayjs(resetAt).format('MM-DD HH:mm')} 重置`;
+function formatUsageReset(resetAt: string, locale: SupportedLocale) {
+  return translate(locale, 'usage.reset', { time: dayjs(resetAt).format('MM-DD HH:mm') });
 }
 
-function TopUsageMetric({ label, usage }: { label: string; usage: CodexUsageWindow }) {
+function TopUsageMetric({ label, usage, locale }: { label: string; usage: CodexUsageWindow; locale: SupportedLocale }) {
   const tone =
     usage.usedPercent >= 90 ? 'var(--danger)' : usage.usedPercent >= 70 ? '#f0a020' : 'var(--accent)';
 
@@ -129,11 +138,15 @@ function TopUsageMetric({ label, usage }: { label: string; usage: CodexUsageWind
     <div
       className="flex min-w-0 flex-1 items-center gap-1.5"
       role="progressbar"
-      aria-label={`${label}已用`}
+      aria-label={translate(locale, 'usage.used', { label })}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={usage.usedPercent}
-      title={`${label}已用 ${usage.usedPercent}% · ${formatUsageReset(usage.resetAt)}`}
+      title={translate(locale, 'usage.usedDetail', {
+        label,
+        percent: usage.usedPercent,
+        reset: formatUsageReset(usage.resetAt, locale)
+      })}
     >
       <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ background: tone }} />
       <span className="flex-shrink-0 text-[11px] font-medium text-[var(--text-2)]">{label}</span>
@@ -187,8 +200,14 @@ export default function App() {
   const noDragStyle = { WebkitAppRegion: 'no-drag' } as CSSProperties;
 
   const systemDark = useSystemDark();
+  const locale = state?.resolvedLocale ?? resolveLocale(defaultSettings.language, navigator.language);
+  const t = (key: TranslationKey, params?: TranslationParams) => translate(locale, key, params);
   const themeMode: ThemeMode = state?.settings.theme ?? 'light';
   const effectiveTheme = themeMode === 'system' ? (systemDark ? 'dark' : 'light') : themeMode;
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   useEffect(() => {
     void window.todoApi.getState().then((appState) => {
@@ -249,7 +268,7 @@ export default function App() {
 
       const nextShortcut = buildShortcutFromKeyEvent(event);
       if (!nextShortcut) {
-        setToastText('请按组合键（至少包含 Ctrl/Alt/Shift）');
+        setToastText(t('shortcut.comboRequired'));
         setTimeout(() => setToastText(''), 1200);
         return;
       }
@@ -274,7 +293,7 @@ export default function App() {
     } catch {
       setCodexUsage({
         status: 'error',
-        message: '读取 Codex 用量失败'
+        message: t('error.codexUsage')
       });
     } finally {
       setUsageRefreshing(false);
@@ -288,24 +307,29 @@ export default function App() {
   }
 
   async function applyShortcutImmediately(nextShortcut: string) {
-    const next = await window.todoApi.updateSettings({
-      globalShortcut: nextShortcut
-    });
-    setState(next);
-    setSettingsDraft((prev) => ({
-      ...prev,
-      globalShortcut: next.settings.globalShortcut
-    }));
+    try {
+      const next = await window.todoApi.updateSettings({
+        globalShortcut: nextShortcut
+      });
+      setState(next);
+      setSettingsDraft((prev) => ({
+        ...prev,
+        globalShortcut: next.settings.globalShortcut
+      }));
 
-    const wanted = normalizeShortcutText(formatShortcutForDisplay(nextShortcut));
-    const applied = normalizeShortcutText(formatShortcutForDisplay(next.settings.globalShortcut));
+      const wanted = normalizeShortcutText(formatShortcutForDisplay(nextShortcut, locale));
+      const applied = normalizeShortcutText(formatShortcutForDisplay(next.settings.globalShortcut, locale));
 
-    if (wanted === applied) {
-      setToastText(`快捷键已设置：${formatShortcutForDisplay(next.settings.globalShortcut)}`);
-    } else {
-      setToastText(`快捷键设置失败，已回退为：${formatShortcutForDisplay(next.settings.globalShortcut)}`);
+      if (wanted === applied) {
+        setToastText(t('shortcut.set', { shortcut: formatShortcutForDisplay(next.settings.globalShortcut, locale) }));
+      } else {
+        setToastText(t('shortcut.fallback', { shortcut: formatShortcutForDisplay(next.settings.globalShortcut, locale) }));
+      }
+      setTimeout(() => setToastText(''), 1600);
+    } catch {
+      notifyError(t('shortcut.saveFailed'));
+      void refreshState();
     }
-    setTimeout(() => setToastText(''), 1600);
   }
 
   function notifyError(message: string) {
@@ -324,7 +348,7 @@ export default function App() {
       setState(next);
       setNewTaskText('');
     } catch {
-      notifyError('添加失败，请检查待办文件是否可写');
+      notifyError(t('error.addTask'));
       void refreshState();
     }
   }
@@ -333,7 +357,7 @@ export default function App() {
     try {
       setState(await window.todoApi.toggleTask(taskId, completed));
     } catch {
-      notifyError('操作失败，请稍后重试');
+      notifyError(t('error.operation'));
       void refreshState();
     }
   }
@@ -342,7 +366,7 @@ export default function App() {
     try {
       setState(await window.todoApi.deleteTask(taskId));
     } catch {
-      notifyError('删除失败，请稍后重试');
+      notifyError(t('error.deleteTask'));
       void refreshState();
     }
   }
@@ -351,7 +375,7 @@ export default function App() {
     try {
       setState(await window.todoApi.updateTaskText(taskId, text));
     } catch {
-      notifyError('保存失败，请稍后重试');
+      notifyError(t('error.saveTask'));
       void refreshState();
     }
   }
@@ -384,28 +408,33 @@ export default function App() {
       const next = await window.todoApi.reorderOpenTasks(reordered.map((task) => task.id));
       setState(next);
     } catch {
-      notifyError('排序保存失败');
+      notifyError(t('error.saveOrder'));
       void refreshState();
     }
   }
 
   async function saveSettings() {
-    const next = await window.todoApi.updateSettings({
-      todoFilePath: settingsDraft.todoFilePath,
-      globalShortcut: settingsDraft.globalShortcut,
-      desktopLockPosition: settingsDraft.desktopLockPosition,
-      desktopMouseThrough: settingsDraft.desktopMouseThrough,
-      showCodexUsage: settingsDraft.showCodexUsage,
-      windowOpacity: settingsDraft.windowOpacity,
-      theme: settingsDraft.theme,
-      webdav: settingsDraft.webdav
-    });
+    try {
+      const next = await window.todoApi.updateSettings({
+        todoFilePath: settingsDraft.todoFilePath,
+        globalShortcut: settingsDraft.globalShortcut,
+        desktopLockPosition: settingsDraft.desktopLockPosition,
+        desktopMouseThrough: settingsDraft.desktopMouseThrough,
+        showCodexUsage: settingsDraft.showCodexUsage,
+        windowOpacity: settingsDraft.windowOpacity,
+        theme: settingsDraft.theme,
+        language: settingsDraft.language,
+        webdav: settingsDraft.webdav
+      });
 
-    setState(next);
-    setSettingsDraft(next.settings);
-    setSettingsOpen(false);
-    setToastText('设置已保存');
-    setTimeout(() => setToastText(''), 1200);
+      setState(next);
+      setSettingsDraft(next.settings);
+      setSettingsOpen(false);
+      setToastText(t('settings.saved'));
+      setTimeout(() => setToastText(''), 1200);
+    } catch {
+      notifyError(t('error.saveSettings'));
+    }
   }
 
   async function selectTodoFolder() {
@@ -418,25 +447,49 @@ export default function App() {
           todoFilePath: pickedTodoPath
         }));
       }
+    } catch {
+      notifyError(t('error.pickFolder'));
     } finally {
       setSelectingFolder(false);
     }
   }
 
   async function toggleAlwaysOnTop(value: boolean) {
-    await window.todoApi.setAlwaysOnTop(value);
-    await refreshState();
+    try {
+      await window.todoApi.setAlwaysOnTop(value);
+      await refreshState();
+    } catch {
+      notifyError(t('error.windowSettings'));
+    }
   }
 
   async function toggleDesktopPin() {
-    await window.todoApi.togglePinMode();
-    await refreshState();
+    try {
+      await window.todoApi.togglePinMode();
+      await refreshState();
+    } catch {
+      notifyError(t('error.desktopMode'));
+    }
   }
 
   async function changeTheme(theme: ThemeMode) {
-    const next = await window.todoApi.updateSettings({ theme });
-    setState(next);
-    setSettingsDraft((prev) => ({ ...prev, theme: next.settings.theme }));
+    try {
+      const next = await window.todoApi.updateSettings({ theme });
+      setState(next);
+      setSettingsDraft((prev) => ({ ...prev, theme: next.settings.theme }));
+    } catch {
+      notifyError(t('error.theme'));
+    }
+  }
+
+  async function changeLanguage(language: LocalePreference) {
+    try {
+      const next = await window.todoApi.updateSettings({ language });
+      setState(next);
+      setSettingsDraft((prev) => ({ ...prev, language: next.settings.language }));
+    } catch {
+      notifyError(t('error.language'));
+    }
   }
 
   async function runSync() {
@@ -445,6 +498,8 @@ export default function App() {
       const result = await window.todoApi.runSync();
       setToastText(result.message);
       setTimeout(() => setToastText(''), 1500);
+    } catch {
+      notifyError(t('error.sync'));
     } finally {
       setSyncing(false);
     }
@@ -472,24 +527,24 @@ export default function App() {
             <ApexLogo size={20} />
             <span className="text-[13px] font-semibold tracking-wide">ApexTodo</span>
             {state?.settings.desktopPinned && (
-              <span className="h-2 w-2 rounded-full bg-[var(--success)]" title="已固定到桌面" />
+              <span className="h-2 w-2 rounded-full bg-[var(--success)]" title={t('window.pinned')} />
             )}
           </div>
           <div className="flex items-center gap-0.5" style={noDragStyle}>
             <button
               className="ghost-icon"
               onClick={() => void changeTheme(effectiveTheme === 'dark' ? 'light' : 'dark')}
-              title={effectiveTheme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+              title={t(effectiveTheme === 'dark' ? 'window.switchLight' : 'window.switchDark')}
             >
               {effectiveTheme === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />}
             </button>
-            <button className="ghost-icon" onClick={() => setSettingsOpen((v) => !v)} title="设置">
+            <button className="ghost-icon" onClick={() => setSettingsOpen((v) => !v)} title={t('common.settings')}>
               <SettingsIcon size={15} />
             </button>
-            <button className="ghost-icon" onClick={() => void window.todoApi.minimizeWindow()} title="最小化">
+            <button className="ghost-icon" onClick={() => void window.todoApi.minimizeWindow()} title={t('common.minimize')}>
               <MinusIcon size={15} />
             </button>
-            <button className="ghost-icon danger" onClick={() => void window.todoApi.closeWindow()} title="退出">
+            <button className="ghost-icon danger" onClick={() => void window.todoApi.closeWindow()} title={t('common.exit')}>
               <CloseIcon size={15} />
             </button>
           </div>
@@ -497,17 +552,21 @@ export default function App() {
 
         {state?.settings.showCodexUsage && (
           <div className="mx-3 mb-1.5 flex items-center gap-2">
-            {codexUsage?.status === 'ready' && codexUsage.fiveHour && codexUsage.weekly ? (
+            {codexUsage?.status === 'ready' && (codexUsage.fiveHour || codexUsage.weekly) ? (
               <>
-                <TopUsageMetric label="5 小时" usage={codexUsage.fiveHour} />
-                <TopUsageMetric label="本周" usage={codexUsage.weekly} />
+                {codexUsage.fiveHour && (
+                  <TopUsageMetric label={t('usage.fiveHours')} usage={codexUsage.fiveHour} locale={locale} />
+                )}
+                {codexUsage.weekly && (
+                  <TopUsageMetric label={t('usage.week')} usage={codexUsage.weekly} locale={locale} />
+                )}
               </>
             ) : (
               <p
                 className={`min-w-0 flex-1 truncate text-[11px] ${codexUsage?.status === 'error' ? 'text-rose-500' : 'text-[var(--text-2)]'}`}
-                title={codexUsage?.message || '正在读取 Codex 用量'}
+                title={codexUsage?.message || t('usage.loadingTitle')}
               >
-                {usageRefreshing ? '正在读取 Codex 用量…' : codexUsage?.message || 'Codex 用量不可用'}
+                {usageRefreshing ? t('usage.loading') : codexUsage?.message || t('usage.unavailable')}
               </p>
             )}
             <button
@@ -515,8 +574,10 @@ export default function App() {
               className="ghost-icon !h-6 !w-6 flex-shrink-0"
               onClick={() => void refreshCodexUsage()}
               disabled={usageRefreshing}
-              title={codexUsage?.fetchedAt ? `更新于 ${dayjs(codexUsage.fetchedAt).format('HH:mm:ss')}` : '刷新 Codex 用量'}
-              aria-label="刷新 Codex 用量"
+              title={codexUsage?.fetchedAt
+                ? t('usage.updatedAt', { time: dayjs(codexUsage.fetchedAt).format('HH:mm:ss') })
+                : t('usage.refresh')}
+              aria-label={t('usage.refresh')}
             >
               <RefreshIcon size={12} className={usageRefreshing ? 'animate-spin' : ''} />
             </button>
@@ -526,7 +587,7 @@ export default function App() {
         {/* 副标题 */}
         <div className="flex items-center justify-between px-3 pb-1 text-[11px] text-[var(--text-3)]">
           <span className="tabular-nums">{dayjs().format('MM-DD HH:mm')}</span>
-          <span>{openTasks.length} 项待办</span>
+          <span>{t('task.count', { count: openTasks.length })}</span>
         </div>
 
         {/* 命令式输入 */}
@@ -542,7 +603,7 @@ export default function App() {
                 }
               }}
               className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--text)] outline-none placeholder:text-[var(--text-3)]"
-              placeholder="添加任务，回车确认…"
+              placeholder={t('task.addPlaceholder')}
             />
             <kbd className="hidden flex-shrink-0 rounded border border-[var(--line)] px-1.5 py-0.5 text-[9px] text-[var(--text-3)] sm:block">
               Enter
@@ -562,6 +623,7 @@ export default function App() {
                     onToggle={toggleTask}
                     onDelete={deleteTask}
                     onUpdateText={updateTaskText}
+                    locale={locale}
                   />
                 ))}
               </div>
@@ -573,7 +635,7 @@ export default function App() {
               <span className="grid h-10 w-10 place-items-center rounded-full bg-[var(--surface-2)] text-[var(--text-3)]">
                 <CheckIcon size={18} />
               </span>
-              <p className="text-xs text-[var(--text-3)]">全部搞定，暂无待办</p>
+              <p className="text-xs text-[var(--text-3)]">{t('task.empty')}</p>
             </div>
           )}
 
@@ -587,7 +649,7 @@ export default function App() {
                   size={13}
                   className={`transition-transform duration-300 ${completedOpen ? 'rotate-180' : ''}`}
                 />
-                <span>已完成 · {completedTasks.length}</span>
+                <span>{t('task.completed', { count: completedTasks.length })}</span>
               </button>
 
               <div
@@ -604,7 +666,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => void toggleTask(task.id, false)}
-                        title="标记为未完成"
+                        title={t('task.markIncomplete')}
                         className="grid h-[18px] w-[18px] flex-shrink-0 place-items-center self-center rounded-full border border-[var(--success)] bg-[var(--success)] text-white"
                       >
                         <CheckIcon size={11} strokeWidth={3} />
@@ -625,7 +687,7 @@ export default function App() {
                       <button
                         className="ghost-icon danger !h-7 !w-7 flex-shrink-0 text-[var(--text-3)]"
                         onClick={() => void deleteTask(task.id)}
-                        title="删除待办"
+                        title={t('task.delete')}
                       >
                         <TrashIcon size={13} />
                       </button>
@@ -641,16 +703,16 @@ export default function App() {
         {settingsOpen && (
           <section className="settings-panel">
             <div className="mb-1 flex items-center justify-between">
-              <p className="text-sm font-semibold">设置</p>
-              <button className="ghost-icon" onClick={() => setSettingsOpen(false)} title="关闭">
+              <p className="text-sm font-semibold">{t('common.settings')}</p>
+              <button className="ghost-icon" onClick={() => setSettingsOpen(false)} title={t('common.close')}>
                 <CloseIcon size={15} />
               </button>
             </div>
 
-            <p className="setting-group-label">窗口与桌面</p>
+            <p className="setting-group-label">{t('settings.windowDesktop')}</p>
             <div className="setting-row">
               <div>
-                <div className="setting-label">始终置顶</div>
+                <div className="setting-label">{t('settings.alwaysOnTop')}</div>
               </div>
               <input
                 type="checkbox"
@@ -661,7 +723,7 @@ export default function App() {
               />
             </div>
             <div className="setting-row">
-              <div className="setting-label">嵌入桌面</div>
+              <div className="setting-label">{t('settings.desktopEmbed')}</div>
               <input
                 type="checkbox"
                 className="toggle"
@@ -671,8 +733,8 @@ export default function App() {
             </div>
             <div className="setting-row">
               <div>
-                <div className="setting-label">锁定位置</div>
-                <div className="setting-hint">仅桌面模式可用</div>
+                <div className="setting-label">{t('settings.lockPosition')}</div>
+                <div className="setting-hint">{t('settings.desktopOnly')}</div>
               </div>
               <input
                 type="checkbox"
@@ -684,8 +746,8 @@ export default function App() {
             </div>
             <div className="setting-row">
               <div>
-                <div className="setting-label">鼠标穿透</div>
-                <div className="setting-hint">Ctrl+Shift+Z 快速切换</div>
+                <div className="setting-label">{t('settings.mouseThrough')}</div>
+                <div className="setting-hint">{t('settings.mouseThroughHint')}</div>
               </div>
               <input
                 type="checkbox"
@@ -695,11 +757,11 @@ export default function App() {
                 onChange={(event) => setSettingsDraft((prev) => ({ ...prev, desktopMouseThrough: event.target.checked }))}
               />
             </div>
-            <p className="setting-group-label">Codex 用量</p>
+            <p className="setting-group-label">{t('settings.codexUsage')}</p>
             <div className="setting-row">
               <div>
-                <div className="setting-label">显示 Codex 用量</div>
-                <div className="setting-hint">顶部展示 5 小时 / 本周用量</div>
+                <div className="setting-label">{t('settings.showCodexUsage')}</div>
+                <div className="setting-hint">{t('settings.showCodexUsageHint')}</div>
               </div>
               <input
                 type="checkbox"
@@ -709,15 +771,15 @@ export default function App() {
               />
             </div>
 
-            <p className="setting-group-label">外观</p>
+            <p className="setting-group-label">{t('settings.appearance')}</p>
             <div className="setting-row">
-              <div className="setting-label">主题模式</div>
+              <div className="setting-label">{t('settings.themeMode')}</div>
               <div className="theme-seg">
                 {(
                   [
-                    { value: 'light', label: '浅色' },
-                    { value: 'dark', label: '深色' },
-                    { value: 'system', label: '跟随系统' }
+                    { value: 'light', label: t('settings.themeLight') },
+                    { value: 'dark', label: t('settings.themeDark') },
+                    { value: 'system', label: t('settings.followSystem') }
                   ] as { value: ThemeMode; label: string }[]
                 ).map((option) => (
                   <button
@@ -731,7 +793,27 @@ export default function App() {
               </div>
             </div>
             <div className="setting-row">
-              <div className="setting-label">窗口透明度</div>
+              <div className="setting-label">{t('settings.language')}</div>
+              <div className="theme-seg">
+                {(
+                  [
+                    { value: 'system', label: t('settings.followSystem') },
+                    { value: 'zh-CN', label: t('settings.languageChinese') },
+                    { value: 'en-US', label: t('settings.languageEnglish') }
+                  ] as { value: LocalePreference; label: string }[]
+                ).map((option) => (
+                  <button
+                    key={option.value}
+                    className={settingsDraft.language === option.value ? 'active' : ''}
+                    onClick={() => void changeLanguage(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-label">{t('settings.opacity')}</div>
               <div className="flex w-1/2 items-center gap-2">
                 <input
                   type="range"
@@ -752,36 +834,38 @@ export default function App() {
               </div>
             </div>
 
-            <p className="setting-group-label">快捷键</p>
+            <p className="setting-group-label">{t('settings.shortcuts')}</p>
             <div className="setting-row">
               <div className="flex items-center gap-2 setting-label">
                 <KeyboardIcon size={14} className="text-[var(--text-2)]" />
-                全局抓取热键
+                {t('settings.captureHotkey')}
               </div>
               <button className="ghost-text" onClick={() => setIsCapturingShortcut(true)}>
-                {isCapturingShortcut ? '请按组合键…' : formatShortcutForDisplay(settingsDraft.globalShortcut)}
+                {isCapturingShortcut
+                  ? t('shortcut.pressCombo')
+                  : formatShortcutForDisplay(settingsDraft.globalShortcut, locale)}
               </button>
             </div>
 
-            <p className="setting-group-label">存储</p>
+            <p className="setting-group-label">{t('settings.storage')}</p>
             <div className="setting-row">
               <div className="flex items-center gap-2 setting-label">
                 <FolderIcon size={14} className="text-[var(--text-2)]" />
-                待办文件夹
+                {t('settings.todoFolder')}
               </div>
               <button className="ghost-text" onClick={() => void selectTodoFolder()} disabled={selectingFolder}>
-                {selectingFolder ? '选择中…' : '选择文件夹'}
+                {selectingFolder ? t('settings.selecting') : t('settings.selectFolder')}
               </button>
             </div>
             <p className="break-all px-1 pb-1 text-[11px] text-[var(--text-3)]">
-              {getTodoFolderPath(settingsDraft.todoFilePath) || '默认：文档/ApexTodo/todo.md'}
+              {getTodoFolderPath(settingsDraft.todoFilePath) || t('settings.defaultPath')}
             </p>
 
             <p className="setting-group-label flex items-center gap-1.5">
-              <CloudIcon size={12} /> WebDAV 同步
+              <CloudIcon size={12} /> {t('settings.webdavSync')}
             </p>
             <div className="setting-row">
-              <div className="setting-label">启用 WebDAV</div>
+              <div className="setting-label">{t('settings.enableWebdav')}</div>
               <input
                 type="checkbox"
                 className="toggle"
@@ -790,14 +874,14 @@ export default function App() {
               />
             </div>
             <div className="mt-2 space-y-2">
-              <input value={settingsDraft.webdav.url} onChange={(event) => updateWebdav('url', event.target.value)} className="field" placeholder="WebDAV 地址" />
+              <input value={settingsDraft.webdav.url} onChange={(event) => updateWebdav('url', event.target.value)} className="field" placeholder={t('settings.webdavUrl')} />
               <div className="grid grid-cols-2 gap-2">
-                <input value={settingsDraft.webdav.username} onChange={(event) => updateWebdav('username', event.target.value)} className="field" placeholder="用户名" />
-                <input value={settingsDraft.webdav.password} onChange={(event) => updateWebdav('password', event.target.value)} className="field" placeholder="密码" type="password" />
+                <input value={settingsDraft.webdav.username} onChange={(event) => updateWebdav('username', event.target.value)} className="field" placeholder={t('settings.username')} />
+                <input value={settingsDraft.webdav.password} onChange={(event) => updateWebdav('password', event.target.value)} className="field" placeholder={t('settings.password')} type="password" />
               </div>
-              <input value={settingsDraft.webdav.remotePath} onChange={(event) => updateWebdav('remotePath', event.target.value)} className="field" placeholder="远端路径 /todo.md" />
+              <input value={settingsDraft.webdav.remotePath} onChange={(event) => updateWebdav('remotePath', event.target.value)} className="field" placeholder={t('settings.remotePath')} />
               <div className="flex items-center gap-2">
-                <span className="flex-shrink-0 text-[var(--text-2)]">同步间隔</span>
+                <span className="flex-shrink-0 text-[var(--text-2)]">{t('settings.syncInterval')}</span>
                 <input
                   value={String(settingsDraft.webdav.intervalMinutes || 60)}
                   onChange={(event) => updateWebdav('intervalMinutes', Math.max(1, Number(event.target.value) || 60))}
@@ -805,22 +889,25 @@ export default function App() {
                   type="number"
                   min={1}
                 />
-                <span className="text-[var(--text-3)]">分钟</span>
+                <span className="text-[var(--text-3)]">{t('settings.minutes')}</span>
               </div>
             </div>
 
             <div className="mt-4 flex gap-2">
               <button className="btn-primary flex-1" onClick={() => void saveSettings()}>
-                保存设置
+                {t('settings.save')}
               </button>
               <button className="ghost-text flex-1 justify-center" onClick={() => void runSync()} disabled={syncing}>
                 <RefreshIcon size={13} className={syncing ? 'animate-spin' : ''} />
-                {syncing ? '同步中…' : '立即同步'}
+                {syncing ? t('settings.syncing') : t('settings.syncNow')}
               </button>
             </div>
 
             <p className="mt-2.5 text-[11px] text-[var(--text-3)]">
-              最近同步：{state?.lastSyncTime ? dayjs(state.lastSyncTime).format('MM-DD HH:mm:ss') : '暂无'} · {state?.syncMessage ?? '未开始'}
+              {t('settings.lastSync', {
+                time: state?.lastSyncTime ? dayjs(state.lastSyncTime).format('MM-DD HH:mm:ss') : t('common.none'),
+                message: state?.syncMessage ?? t('common.notStarted')
+              })}
             </p>
           </section>
         )}

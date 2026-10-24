@@ -1,8 +1,9 @@
 import { app, safeStorage } from 'electron';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { watch, FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { AppSettings, TodoItem } from '../shared/types';
+import { normalizeLocalePreference } from './i18n';
 import { parseMarkdownTasks, stringifyMarkdownTasks } from './markdown';
 
 const SETTINGS_FILE = 'settings.json';
@@ -25,6 +26,7 @@ function defaultSettings(): AppSettings {
     showCodexUsage: false,
     windowOpacity: 0.96,
     theme: 'light',
+    language: 'system',
     windowBounds: undefined,
     webdav: {
       enabled: false,
@@ -37,7 +39,11 @@ function defaultSettings(): AppSettings {
   };
 }
 
-function decryptWebDavPassword(password: string) {
+function decryptWebDavPassword(password: unknown) {
+  if (typeof password !== 'string') {
+    return '';
+  }
+
   if (!password.startsWith(ENCRYPTED_PASSWORD_PREFIX)) {
     return password;
   }
@@ -82,8 +88,21 @@ export class StorageService {
   }
 
   async loadSettings(): Promise<AppSettings> {
+    let raw: string;
+
     try {
-      const raw = await readFile(this.settingsPath, 'utf-8');
+      raw = await readFile(this.settingsPath, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+
+      const next = defaultSettings();
+      await this.saveSettings(next);
+      return next;
+    }
+
+    try {
       const parsed = JSON.parse(raw) as Partial<AppSettings> & { launchAtStartup?: unknown };
       const { launchAtStartup: _legacyLaunchAtStartup, ...currentSettings } = parsed;
       const webdav = {
@@ -93,12 +112,16 @@ export class StorageService {
       return {
         ...defaultSettings(),
         ...currentSettings,
+        language: normalizeLocalePreference(currentSettings.language),
         webdav: {
           ...webdav,
           password: decryptWebDavPassword(webdav.password)
         }
       };
-    } catch {
+    } catch (error) {
+      const backupPath = `${this.settingsPath}.corrupt-${Date.now()}.bak`;
+      await copyFile(this.settingsPath, backupPath);
+      console.error(`设置文件损坏，已备份到 ${backupPath}:`, error);
       const next = defaultSettings();
       await this.saveSettings(next);
       return next;
@@ -114,7 +137,10 @@ export class StorageService {
     await mkdir(path.dirname(todoPath), { recursive: true });
     try {
       await readFile(todoPath, 'utf-8');
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
       await writeFile(todoPath, '', 'utf-8');
     }
   }

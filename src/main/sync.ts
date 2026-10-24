@@ -1,10 +1,42 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { createClient } from 'webdav';
 import { AppSettings } from '../shared/types';
+import { LocalizedError, LocalizedMessage, SupportedLocale, localizedErrorMessage } from './i18n';
 
 interface SyncStatus {
   time?: string;
-  message: string;
+  message: LocalizedMessage;
+}
+
+type RemoteFileContents = string | Buffer | Uint8Array | { data?: string | Buffer | Uint8Array };
+
+export function decodeRemoteFileContents(value: RemoteFileContents): string {
+  const payload = typeof value === 'object' && value !== null && 'data' in value ? value.data : value;
+
+  if (typeof payload === 'string') {
+    return payload;
+  }
+  if (Buffer.isBuffer(payload) || payload instanceof Uint8Array) {
+    return Buffer.from(payload).toString('utf-8');
+  }
+
+  throw new LocalizedError('sync.invalidRemoteContent');
+}
+
+export function parseRemoteModifiedTime(value: {
+  lastmod?: string;
+  lastModified?: string;
+  mtime?: string | number | Date;
+  data?: { lastmod?: string; lastModified?: string; mtime?: string | number | Date };
+}): number | null {
+  const payload = value?.data ?? value;
+  const raw = payload?.lastmod ?? payload?.lastModified ?? payload?.mtime;
+  if (raw === undefined || raw === null || raw === '') {
+    return null;
+  }
+
+  const timestamp = raw instanceof Date ? raw.getTime() : typeof raw === 'number' ? raw : Date.parse(raw);
+  return Number.isFinite(timestamp) ? timestamp : null;
 }
 
 export class WebDavSyncService {
@@ -12,7 +44,8 @@ export class WebDavSyncService {
 
   constructor(
     private getSettings: () => AppSettings,
-    private onStatus: (status: SyncStatus) => void
+    private onStatus: (status: SyncStatus) => void,
+    private getLocale: () => SupportedLocale
   ) {}
 
   start() {
@@ -35,8 +68,12 @@ export class WebDavSyncService {
 
     const intervalMinutes = Math.max(1, settings.webdav.intervalMinutes || 60);
     this.timer = setInterval(() => {
-      this.sync(settings.todoFilePath).catch((error) => {
+      const currentSettings = this.getSettings();
+      this.sync(currentSettings.todoFilePath).catch((error) => {
         console.error('WebDAV 定时同步失败:', error);
+        this.onStatus({
+          message: { key: 'sync.scheduledFailed', params: { message: localizedErrorMessage(this.getLocale(), error) } }
+        });
       });
     }, intervalMinutes * 60 * 1000);
   }
@@ -45,7 +82,7 @@ export class WebDavSyncService {
     const settings = this.getSettings();
     const webdav = settings.webdav;
     if (!webdav.enabled || !webdav.url || !webdav.username) {
-      this.onStatus({ message: 'WebDAV 未启用或配置不完整' });
+      this.onStatus({ message: { key: 'sync.notConfigured' } });
       return;
     }
 
@@ -64,19 +101,19 @@ export class WebDavSyncService {
       await client.putFileContents(remotePath, localContent, { overwrite: true });
       this.onStatus({
         time: new Date().toISOString(),
-        message: '首次同步完成，已推送本地文件'
+        message: { key: 'sync.initialPush' }
       });
       return;
     }
 
-    const remoteBuffer = await client.getFileContents(remotePath);
+    const remoteBuffer = (await client.getFileContents(remotePath)) as unknown as RemoteFileContents;
     // webdav 不同版本可能返回 string / Buffer / 带 details 包装，统一按字节处理
-    const remoteContent = Buffer.from(remoteBuffer as unknown as Uint8Array).toString('utf-8');
+    const remoteContent = decodeRemoteFileContents(remoteBuffer);
 
     if (remoteContent === localContent) {
       this.onStatus({
         time: new Date().toISOString(),
-        message: 'WebDAV 已是最新'
+        message: { key: 'sync.upToDate' }
       });
       return;
     }
@@ -88,20 +125,16 @@ export class WebDavSyncService {
       mtime?: string | number | Date;
       data?: { lastmod?: string; lastModified?: string; mtime?: string | number | Date };
     };
-    const statData = statRaw?.data ?? statRaw;
-    const remoteMtime = statData?.lastmod
-      ? Date.parse(statData.lastmod)
-      : statData?.lastModified
-        ? Date.parse(statData.lastModified)
-        : statData?.mtime
-          ? new Date(statData.mtime).getTime()
-          : 0;
+    const remoteMtime = parseRemoteModifiedTime(statRaw);
+    if (remoteMtime === null) {
+      throw new LocalizedError('sync.missingRemoteTime');
+    }
 
     if (remoteMtime > localStat.mtimeMs + 1000) {
       await writeFile(todoFilePath, remoteContent, 'utf-8');
       this.onStatus({
         time: new Date().toISOString(),
-        message: '检测到远端更新，已拉取覆盖本地'
+        message: { key: 'sync.remotePulled' }
       });
       return;
     }
@@ -109,7 +142,7 @@ export class WebDavSyncService {
     await client.putFileContents(remotePath, localContent, { overwrite: true });
     this.onStatus({
       time: new Date().toISOString(),
-      message: '本地更新已推送到 WebDAV'
+      message: { key: 'sync.localPushed' }
     });
   }
 }
