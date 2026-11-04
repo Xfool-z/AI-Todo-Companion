@@ -12,6 +12,7 @@ import {
   resolveLocale,
   translate
 } from './i18n';
+import { BatchImportTask } from './batchImport';
 import { createTaskFromText } from './markdown';
 import { getCodexUsage } from './codexUsage';
 import { StorageService } from './storage';
@@ -20,6 +21,9 @@ import { WebDavSyncService } from './sync';
 const execFileAsync = promisify(execFile);
 const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+A';
 const DESKTOP_INTERACT_SHORTCUT = 'CommandOrControl+Shift+Z';
+const CUSTOM_USER_DATA_PATH = path.join(app.getPath('appData'), 'ApexTodo AI Companion');
+
+app.setPath('userData', CUSTOM_USER_DATA_PATH);
 
 let mainWindow: BrowserWindow | null = null;
 let settings: AppSettings;
@@ -161,7 +165,7 @@ function pushNotification(text: string) {
   }
 
   new Notification({
-    title: 'ApexTodo',
+    title: 'ApexTodo AI Companion',
     body: text,
     silent: true
   }).show();
@@ -381,7 +385,7 @@ function updateTrayMenu() {
     }
   ]);
 
-  tray.setToolTip('ApexTodo');
+  tray.setToolTip('ApexTodo AI Companion');
   tray.setContextMenu(trayMenu);
 }
 
@@ -664,6 +668,30 @@ function setupIpcHandlers() {
     const task = createTaskFromText(text);
     tasks = [task, ...tasks];
     await persistTasksAndBroadcast('task.added', true);
+    return currentState();
+  });
+
+  ipcMain.handle('task:import', async (_event, imported: BatchImportTask[]) => {
+    const validItems = Array.isArray(imported)
+      ? imported
+          .slice(0, 500)
+          .map((item) => ({
+            text: typeof item?.text === 'string' ? item.text.replace(/\s+/g, ' ').trim() : '',
+            completed: Boolean(item?.completed)
+          }))
+          .filter((item) => item.text)
+      : [];
+
+    if (validItems.length === 0) {
+      return currentState();
+    }
+
+    const importedTasks = validItems.map((item) => ({
+      ...createTaskFromText(item.text),
+      completed: item.completed
+    }));
+    tasks = [...importedTasks, ...tasks];
+    await persistTasksAndBroadcast('task.imported');
     return currentState();
   });
 
