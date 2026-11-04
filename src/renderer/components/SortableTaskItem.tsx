@@ -114,8 +114,8 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
           </div>
         ) : (
           <p
-            onDoubleClick={() => setIsEditing(true)}
-            title={translate(locale, 'task.doubleClickEdit')}
+            onClick={() => setIsEditing(true)}
+            title={translate(locale, 'task.clickEdit')}
             className={`min-w-0 flex-1 cursor-text truncate text-[13px] leading-[18px] ${
               task.completed ? 'text-[var(--text-3)] line-through' : 'text-[var(--text)]'
             }`}
