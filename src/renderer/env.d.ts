@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import { AppSettings, AppState, CaptureResult, CodexUsage, SaveToastPayload } from '../shared/types';
+import { BatchImportTask } from '../main/batchImport';
 
 declare global {
   interface Window {
@@ -8,6 +9,7 @@ declare global {
       getState: () => Promise<AppState>;
       getCodexUsage: () => Promise<CodexUsage>;
       addTask: (text: string) => Promise<AppState>;
+      importTasks: (tasks: BatchImportTask[]) => Promise<AppState>;
       toggleTask: (taskId: string, completed: boolean) => Promise<AppState>;
       deleteTask: (taskId: string) => Promise<AppState>;
       updateTaskText: (taskId: string, text: string) => Promise<AppState>;
