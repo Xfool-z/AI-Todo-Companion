@@ -11,7 +11,7 @@ const TODO_FILE_NAME = 'todo.md';
 const ENCRYPTED_PASSWORD_PREFIX = 'safeStorage:';
 
 function getDefaultTodoPath() {
-  const baseDir = path.join(app.getPath('documents'), 'ApexTodo');
+  const baseDir = path.join(app.getPath('documents'), 'ApexTodo AI Companion');
   return path.join(baseDir, TODO_FILE_NAME);
 }
 
