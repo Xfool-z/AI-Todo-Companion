@@ -1,13 +1,13 @@
 {
-  "name": "apex-todo",
+  "name": "apex-todo-ai-companion",
   "version": "1.2.2",
-  "description": "ApexTodo local markdown todo desktop widget",
+  "description": "ApexTodo AI Companion desktop widget with batch task import",
   "main": "dist-electron/main.js",
   "author": "BigWatermelon",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "https://github.com/XGxin/ApexTodo.git"
+    "url": "https://github.com/Xfool-z/AI-Todo-Companion.git"
   },
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:electron\"",
@@ -17,11 +17,12 @@
     "build": "npm run build:renderer && npm run build:main",
     "build:renderer": "node ./node_modules/vite/dist/node/cli.js build",
     "build:main": "tsup --config tsup.config.ts",
-    "test": "npm run build:main && node --test tests/markdown.test.cjs tests/sync.test.cjs tests/i18n.test.cjs tests/codexUsage.test.cjs",
+    "test": "npm run build:main && node --test tests/markdown.test.cjs tests/sync.test.cjs tests/i18n.test.cjs tests/codexUsage.test.cjs tests/batchImport.test.cjs",
     "test:system": "node scripts/system-smoke.mjs",
     "preview": "node ./node_modules/vite/dist/node/cli.js preview",
     "dist": "npm run build && electron-builder --win appx --x64",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "dist:win": "npm run build && electron-builder --win nsis --x64"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -53,8 +54,8 @@
     "wait-on": "^9.0.4"
   },
   "build": {
-    "appId": "com.apextodo.app",
-    "productName": "ApexTodo",
+    "appId": "com.xfoolz.apextodo.aicompanion",
+    "productName": "ApexTodo AI Companion",
     "asar": true,
     "compression": "maximum",
     "electronLanguages": [
@@ -81,11 +82,11 @@
       ]
     },
     "appx": {
-      "identityName": "BigWatermelon.ApexTodo",
+      "identityName": "Xfoolz.ApexTodoAICompanion",
       "publisher": "CN=3E0A3275-0795-4C6C-B5B3-A350C4BC8567",
       "publisherDisplayName": "BigWatermelon",
-      "applicationId": "ApexTodo",
-      "displayName": "ApexTodo",
+      "applicationId": "ApexTodoAICompanion",
+      "displayName": "ApexTodo AI Companion",
       "backgroundColor": "#0ccf6c",
       "languages": [
         "zh-CN",
