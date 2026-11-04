@@ -18,6 +18,7 @@ import {
   resolveLocale,
   translate
 } from '../main/i18n';
+import { BatchImportCandidate, createBatchImportPreview } from '../main/batchImport';
 import { SortableTaskItem } from './components/SortableTaskItem';
 import {
   ApexLogo,
@@ -185,6 +186,9 @@ function useSystemDark() {
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [newTaskText, setNewTaskText] = useState('');
+  const [batchImportOpen, setBatchImportOpen] = useState(false);
+  const [batchImportText, setBatchImportText] = useState('');
+  const [batchCandidates, setBatchCandidates] = useState<BatchImportCandidate[]>([]);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>(defaultSettings);
@@ -285,6 +289,7 @@ export default function App() {
 
   const openTasks = useMemo(() => state?.tasks.filter((task) => !task.completed) ?? [], [state]);
   const completedTasks = useMemo(() => state?.tasks.filter((task) => task.completed) ?? [], [state]);
+  const selectedImportCount = batchCandidates.filter((candidate) => candidate.selected).length;
 
   async function refreshCodexUsage() {
     setUsageRefreshing(true);
@@ -349,6 +354,35 @@ export default function App() {
       setNewTaskText('');
     } catch {
       notifyError(t('error.addTask'));
+      void refreshState();
+    }
+  }
+
+  function previewBatchImport() {
+    const preview = createBatchImportPreview(batchImportText, state?.tasks ?? []);
+    setBatchCandidates(preview);
+    if (preview.length === 0) {
+      notifyError(t('batch.empty'));
+    }
+  }
+
+  async function importSelectedTasks() {
+    const selected = batchCandidates.filter((candidate) => candidate.selected);
+    if (selected.length === 0) {
+      notifyError(t('batch.noneSelected'));
+      return;
+    }
+
+    try {
+      const next = await window.todoApi.importTasks(
+        selected.map(({ text, completed }) => ({ text, completed }))
+      );
+      setState(next);
+      setBatchImportOpen(false);
+      setBatchImportText('');
+      setBatchCandidates([]);
+    } catch {
+      notifyError(t('error.importTask'));
       void refreshState();
     }
   }
@@ -538,7 +572,14 @@ export default function App() {
             >
               {effectiveTheme === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />}
             </button>
-            <button className="ghost-icon" onClick={() => setSettingsOpen((v) => !v)} title={t('common.settings')}>
+            <button
+              className="ghost-icon"
+              onClick={() => {
+                setBatchImportOpen(false);
+                setSettingsOpen((v) => !v);
+              }}
+              title={t('common.settings')}
+            >
               <SettingsIcon size={15} />
             </button>
             <button className="ghost-icon" onClick={() => void window.todoApi.minimizeWindow()} title={t('common.minimize')}>
@@ -609,6 +650,20 @@ export default function App() {
               Enter
             </kbd>
           </div>
+        </div>
+
+        <div className="flex-shrink-0 px-3 pb-2">
+          <button
+            type="button"
+            className="ghost-text w-full justify-center"
+            onClick={() => {
+              setSettingsOpen(false);
+              setBatchImportOpen(true);
+            }}
+          >
+            <PlusIcon size={13} />
+            {t('batch.open')}
+          </button>
         </div>
 
         {/* 任务列表 */}
@@ -698,6 +753,90 @@ export default function App() {
             </div>
           )}
         </main>
+
+        {batchImportOpen && (
+          <section className="settings-panel">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm font-semibold">{t('batch.title')}</p>
+              <button className="ghost-icon" onClick={() => setBatchImportOpen(false)} title={t('common.close')}>
+                <CloseIcon size={15} />
+              </button>
+            </div>
+
+            <textarea
+              value={batchImportText}
+              onChange={(event) => {
+                setBatchImportText(event.target.value);
+                setBatchCandidates([]);
+              }}
+              className="field min-h-32 resize-y text-[13px] leading-5"
+              placeholder={t('batch.pastePlaceholder')}
+              autoFocus
+            />
+            <button
+              type="button"
+              className="btn-primary mt-3"
+              onClick={previewBatchImport}
+              disabled={!batchImportText.trim()}
+            >
+              {t('batch.parse')}
+            </button>
+
+            {batchCandidates.length > 0 && (
+              <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
+                <p className="setting-group-label !mt-0">{t('batch.preview')}</p>
+                <div className="space-y-2">
+                  {batchCandidates.map((candidate, index) => (
+                    <label
+                      key={`${candidate.text}-${index}`}
+                      className="flex cursor-pointer items-start gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={candidate.selected}
+                        onChange={(event) =>
+                          setBatchCandidates((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, selected: event.target.checked } : item
+                            )
+                          )
+                        }
+                      />
+                      <span className="min-w-0 flex-1 text-[13px] leading-5">
+                        <span className={candidate.completed ? 'line-through text-[var(--text-2)]' : ''}>
+                          {candidate.text}
+                        </span>
+                        {candidate.duplicate && (
+                          <span className="mt-0.5 block text-[10px] text-amber-500">
+                            {t('batch.duplicate')}
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                className="btn-primary flex-1"
+                onClick={() => void importSelectedTasks()}
+                disabled={selectedImportCount === 0}
+              >
+                {t('batch.importSelected')} · {selectedImportCount}
+              </button>
+              <button
+                type="button"
+                className="ghost-text flex-1 justify-center"
+                onClick={() => setBatchImportOpen(false)}
+              >
+                {t('common.cancel')}
+              </button>
+            </div>
+          </section>
+        )}
 
         {/* 设置面板 */}
         {settingsOpen && (
