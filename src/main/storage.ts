@@ -11,7 +11,7 @@ const TODO_FILE_NAME = 'todo.md';
 const ENCRYPTED_PASSWORD_PREFIX = 'safeStorage:';
 
 function getDefaultTodoPath() {
-  const baseDir = path.join(app.getPath('documents'), 'ApexTodo');
+  const baseDir = path.join(app.getPath('documents'), 'Just Do It');
   return path.join(baseDir, TODO_FILE_NAME);
 }
 
@@ -28,6 +28,9 @@ function defaultSettings(): AppSettings {
     theme: 'light',
     language: 'system',
     windowBounds: undefined,
+    projects: [],
+    activeProjectId: '',
+    workspaceView: 'focus',
     webdav: {
       enabled: false,
       url: '',

@@ -5,10 +5,18 @@ const api = {
   getState: () => ipcRenderer.invoke('app:get-state') as Promise<AppState>,
   getCodexUsage: () => ipcRenderer.invoke('codex:get-usage') as Promise<CodexUsage>,
   addTask: (text: string) => ipcRenderer.invoke('task:add', text) as Promise<AppState>,
+  addTaskToProject: (text: string, projectId?: string) => ipcRenderer.invoke('task:add-to-project', text, projectId) as Promise<AppState>,
+  batchAddTasks: (entries: Array<{ text: string; completed: boolean }>, projectId?: string) =>
+    ipcRenderer.invoke('tasks:batch-add', entries, projectId) as Promise<AppState>,
   toggleTask: (taskId: string, completed: boolean) => ipcRenderer.invoke('task:toggle', taskId, completed) as Promise<AppState>,
   deleteTask: (taskId: string) => ipcRenderer.invoke('task:delete', taskId) as Promise<AppState>,
   updateTaskText: (taskId: string, text: string) =>
     ipcRenderer.invoke('task:update-text', taskId, text) as Promise<AppState>,
+  updateTaskComment: (taskId: string, comment: string) =>
+    ipcRenderer.invoke('task:update-comment', taskId, comment) as Promise<AppState>,
+  addProject: (title: string) => ipcRenderer.invoke('project:add', title) as Promise<AppState>,
+  updateProject: (projectId: string, title: string) => ipcRenderer.invoke('project:update', projectId, title) as Promise<AppState>,
+  deleteProject: (projectId: string) => ipcRenderer.invoke('project:delete', projectId) as Promise<AppState>,
   reorderOpenTasks: (orderedOpenIds: string[]) =>
     ipcRenderer.invoke('task:reorder-open', orderedOpenIds) as Promise<AppState>,
   captureTask: () => ipcRenderer.invoke('task:capture') as Promise<CaptureResult>,

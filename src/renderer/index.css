@@ -5,7 +5,7 @@
 :root,
 [data-theme='light'] {
   color-scheme: light;
-  /* 微信风 · 浅色 */
+  /* Just Do It · 黑白浅色 */
   --bg: #f7f7f7;
   --surface: #ffffff;
   --surface-2: #f3f3f3;
@@ -14,11 +14,11 @@
   --text: #1a1a1a;
   --text-2: #7a7a7a;
   --text-3: #b0b0b0;
-  --accent: #07c160;
-  --accent-strong: #06ad56;
-  --accent-soft: rgba(7, 193, 96, 0.1);
-  --success: #07c160;
-  --danger: #fa5151;
+  --accent: #111111;
+  --accent-strong: #000000;
+  --accent-soft: rgba(0, 0, 0, 0.1);
+  --success: #111111;
+  --danger: #111111;
   --hover: rgba(0, 0, 0, 0.04);
   --field: #ffffff;
   --shadow: rgba(0, 0, 0, 0.12);
@@ -26,7 +26,7 @@
 
 [data-theme='dark'] {
   color-scheme: dark;
-  /* 微信风 · 深色（深灰，不是纯黑） */
+  /* Just Do It · 黑白深色 */
   --bg: #1f1f1f;
   --surface: #2e2e2e;
   --surface-2: #383838;
@@ -35,11 +35,11 @@
   --text: #ffffff;
   --text-2: #a6a6a6;
   --text-3: #757575;
-  --accent: #09c161;
-  --accent-strong: #07ab57;
-  --accent-soft: rgba(9, 193, 97, 0.16);
-  --success: #2fd47f;
-  --danger: #ff6b6b;
+  --accent: #ffffff;
+  --accent-strong: #f0f0f0;
+  --accent-soft: rgba(255, 255, 255, 0.15);
+  --success: #ffffff;
+  --danger: #ffffff;
   --hover: rgba(255, 255, 255, 0.07);
   --field: #383838;
   --shadow: rgba(0, 0, 0, 0.55);
@@ -130,7 +130,7 @@ body {
   background: var(--hover);
 }
 
-/* 主按钮：微信绿 */
+/* 主按钮：黑白主题 */
 .btn-primary {
   display: inline-flex;
   align-items: center;
@@ -140,7 +140,7 @@ body {
   padding: 0.55rem 0.9rem;
   font-size: 0.78rem;
   font-weight: 500;
-  color: #fff;
+  color: var(--bg);
   background: var(--accent);
   transition: background 0.16s ease;
 }
