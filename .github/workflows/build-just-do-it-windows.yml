@@ -23,8 +23,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Just-Do-It-Windows-x64
-          path: |
-            release/Just-Do-It-Windows-x64.exe
-            release/Just-Do-It-Windows-x64.zip
+          path: release/Just-Do-It-Windows-x64.exe
           if-no-files-found: error
           retention-days: 30
