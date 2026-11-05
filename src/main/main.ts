@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { AppSettings, AppState, CaptureResult, TodoItem, WebDavConfig, WindowBoundsState } from '../shared/types';
+import { AppSettings, AppState, CaptureResult, TodoItem, TodoProject, WebDavConfig, WindowBoundsState } from '../shared/types';
 import {
   LocalizedMessage,
   TranslationKey,
@@ -12,7 +12,6 @@ import {
   resolveLocale,
   translate
 } from './i18n';
-import { BatchImportTask } from './batchImport';
 import { createTaskFromText } from './markdown';
 import { getCodexUsage } from './codexUsage';
 import { StorageService } from './storage';
@@ -21,9 +20,9 @@ import { WebDavSyncService } from './sync';
 const execFileAsync = promisify(execFile);
 const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+A';
 const DESKTOP_INTERACT_SHORTCUT = 'CommandOrControl+Shift+Z';
-const CUSTOM_USER_DATA_PATH = path.join(app.getPath('appData'), 'ApexTodo AI Companion');
 
-app.setPath('userData', CUSTOM_USER_DATA_PATH);
+app.setName('Just Do It');
+app.setPath('userData', path.join(app.getPath('appData'), 'Just Do It'));
 
 let mainWindow: BrowserWindow | null = null;
 let settings: AppSettings;
@@ -165,7 +164,7 @@ function pushNotification(text: string) {
   }
 
   new Notification({
-    title: 'ApexTodo AI Companion',
+    title: 'Just Do It',
     body: text,
     silent: true
   }).show();
@@ -385,7 +384,7 @@ function updateTrayMenu() {
     }
   ]);
 
-  tray.setToolTip('ApexTodo AI Companion');
+  tray.setToolTip('Just Do It');
   tray.setContextMenu(trayMenu);
 }
 
@@ -555,7 +554,7 @@ function createWindow(startHidden: boolean) {
     hasShadow: !enableTransparentWindow,
     skipTaskbar: true,
     show: !startHidden,
-    title: 'ApexTodo',
+    title: 'Just Do It',
     icon: app.isPackaged ? undefined : path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -671,27 +670,22 @@ function setupIpcHandlers() {
     return currentState();
   });
 
-  ipcMain.handle('task:import', async (_event, imported: BatchImportTask[]) => {
-    const validItems = Array.isArray(imported)
-      ? imported
-          .slice(0, 500)
-          .map((item) => ({
-            text: typeof item?.text === 'string' ? item.text.replace(/\s+/g, ' ').trim() : '',
-            completed: Boolean(item?.completed)
-          }))
-          .filter((item) => item.text)
-      : [];
+  ipcMain.handle('task:add-to-project', async (_event, text: string, projectId?: string) => {
+    if (!text || !text.trim()) return currentState();
+    const task = createTaskFromText(text);
+    task.projectId = projectId || undefined;
+    tasks = [task, ...tasks];
+    await persistTasksAndBroadcast('task.added', true);
+    return currentState();
+  });
 
-    if (validItems.length === 0) {
-      return currentState();
-    }
-
-    const importedTasks = validItems.map((item) => ({
-      ...createTaskFromText(item.text),
-      completed: item.completed
-    }));
-    tasks = [...importedTasks, ...tasks];
-    await persistTasksAndBroadcast('task.imported');
+  ipcMain.handle('tasks:batch-add', async (_event, entries: Array<{ text: string; completed: boolean }>, projectId?: string) => {
+    const next = (Array.isArray(entries) ? entries : [])
+      .map((entry) => ({ text: String(entry?.text || '').replace(/\s+/g, ' ').trim(), completed: Boolean(entry?.completed) }))
+      .filter((entry) => entry.text)
+      .map((entry) => ({ ...createTaskFromText(entry.text), completed: entry.completed, projectId: projectId || undefined }));
+    tasks = [...tasks.filter((task) => !task.completed), ...next.filter((task) => !task.completed), ...tasks.filter((task) => task.completed), ...next.filter((task) => task.completed)];
+    await persistTasksAndBroadcast();
     return currentState();
   });
 
@@ -705,7 +699,7 @@ function setupIpcHandlers() {
     const openTasks = tasks.filter((task) => !task.completed && task.id !== taskId);
     const completedTasks = tasks.filter((task) => task.completed && task.id !== taskId);
 
-    tasks = [...openTasks, target, ...completedTasks];
+    tasks = completed ? [...openTasks, ...completedTasks, target] : [...openTasks, target, ...completedTasks];
 
     await persistTasksAndBroadcast();
     return currentState();
@@ -723,9 +717,9 @@ function setupIpcHandlers() {
       }
     }
 
-    const restOpen = [...openMap.values()];
-    const done = tasks.filter((task) => task.completed);
-    tasks = [...reorderedOpen, ...restOpen, ...done];
+    const reorderedIds = new Set(reorderedOpen.map((task) => task.id));
+    let index = 0;
+    tasks = tasks.map((task) => !task.completed && reorderedIds.has(task.id) ? reorderedOpen[index++] : task);
 
     await persistTasksAndBroadcast();
     return currentState();
@@ -752,6 +746,43 @@ function setupIpcHandlers() {
     }
 
     target.text = nextText;
+    await persistTasksAndBroadcast();
+    return currentState();
+  });
+
+  ipcMain.handle('task:update-comment', async (_event, taskId: string, comment: string) => {
+    const target = tasks.find((task) => task.id === taskId);
+    if (!target) return currentState();
+    target.comment = String(comment || '').trim() || undefined;
+    await persistTasksAndBroadcast();
+    return currentState();
+  });
+
+  ipcMain.handle('project:add', async (_event, title: string) => {
+    const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!cleanTitle) return currentState();
+    const project: TodoProject = { id: randomUUID(), title: cleanTitle, createdAt: new Date().toISOString() };
+    settings.projects = [...settings.projects, project];
+    settings.activeProjectId = project.id;
+    await storage.saveSettings(settings);
+    broadcastState();
+    return currentState();
+  });
+
+  ipcMain.handle('project:update', async (_event, projectId: string, title: string) => {
+    const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!cleanTitle) return currentState();
+    settings.projects = settings.projects.map((project) => project.id === projectId ? { ...project, title: cleanTitle } : project);
+    await storage.saveSettings(settings);
+    broadcastState();
+    return currentState();
+  });
+
+  ipcMain.handle('project:delete', async (_event, projectId: string) => {
+    settings.projects = settings.projects.filter((project) => project.id !== projectId);
+    if (settings.activeProjectId === projectId) settings.activeProjectId = settings.projects[0]?.id || '';
+    tasks = tasks.map((task) => task.projectId === projectId ? { ...task, projectId: undefined } : task);
+    await storage.saveSettings(settings);
     await persistTasksAndBroadcast();
     return currentState();
   });
@@ -858,6 +889,9 @@ async function bootstrap() {
   settings.showCodexUsage = typeof settings.showCodexUsage === 'boolean' ? settings.showCodexUsage : false;
   settings.language = normalizeLocalePreference(settings.language);
   settings.windowBounds = normalizeWindowBounds(settings.windowBounds) ?? undefined;
+  settings.projects = Array.isArray(settings.projects) ? settings.projects : [];
+  settings.activeProjectId = typeof settings.activeProjectId === 'string' ? settings.activeProjectId : '';
+  settings.workspaceView = settings.workspaceView === 'all' ? 'all' : 'focus';
   if (settings.desktopPinned) {
     settings.alwaysOnTop = false;
   } else {
@@ -907,7 +941,7 @@ if (!gotSingleInstanceLock) {
       await bootstrap();
     } catch (error) {
       const message = (error as Error).message || String(error);
-      console.error('ApexTodo 启动失败:', error);
+      console.error('Just Do It 启动失败:', error);
       dialog.showErrorBox(t('startup.failedTitle'), t('startup.failedBody', { message }));
       app.quit();
       return;

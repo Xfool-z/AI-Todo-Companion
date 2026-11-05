@@ -11,19 +11,28 @@ interface Props {
   onToggle: (id: string, completed: boolean) => void;
   onDelete: (id: string) => void;
   onUpdateText: (id: string, text: string) => void;
+  onUpdateComment: (id: string, comment: string) => void;
+  projectTitle?: string;
   locale: SupportedLocale;
 }
 
-export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, locale }: Props) {
+export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpdateComment, projectTitle, locale }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const [isEditing, setIsEditing] = useState(false);
   const [draftText, setDraftText] = useState(task.text);
+  const [commentOpen, setCommentOpen] = useState(Boolean(task.comment));
+  const [comment, setComment] = useState(task.comment || '');
 
   useEffect(() => {
     if (!isEditing) {
       setDraftText(task.text);
     }
   }, [task.text, isEditing]);
+
+  useEffect(() => {
+    setComment(task.comment || '');
+    if (task.comment) setCommentOpen(true);
+  }, [task.comment]);
 
   function submitEdit() {
     const next = draftText.trim();
@@ -70,13 +79,14 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
         style={{
           borderColor: task.completed ? 'var(--success)' : 'var(--line-strong)',
           background: task.completed ? 'var(--success)' : 'transparent',
-          color: '#ffffff'
+          color: 'var(--bg)'
         }}
       >
         {task.completed && <CheckIcon size={11} strokeWidth={3} />}
       </button>
 
       <div className="min-w-0 flex-1 self-center">
+        {projectTitle && <p className="mb-1 text-[10px] text-[var(--text-3)]">{projectTitle}</p>}
         {isEditing ? (
           <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
             <textarea
@@ -115,13 +125,33 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
         ) : (
           <p
             onClick={() => setIsEditing(true)}
-            title={translate(locale, 'task.clickEdit')}
+            title={translate(locale, 'task.doubleClickEdit')}
             className={`min-w-0 flex-1 cursor-text truncate text-[13px] leading-[18px] ${
               task.completed ? 'text-[var(--text-3)] line-through' : 'text-[var(--text)]'
             }`}
           >
             {task.text}
           </p>
+        )}
+
+        {!isEditing && (commentOpen || task.comment) && (
+          <textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            onBlur={() => {
+              const next = comment.trim();
+              onUpdateComment(task.id, next);
+              if (!next) setCommentOpen(false);
+            }}
+            placeholder="填写评语：完成情况、问题或下一步…"
+            rows={2}
+            className="field mt-2 min-h-[52px] resize-y !py-2 text-[12px]"
+          />
+        )}
+        {!isEditing && !commentOpen && !task.comment && (
+          <button type="button" className="mt-1 text-[11px] text-[var(--text-3)] hover:text-[var(--text)]" onClick={() => setCommentOpen(true)}>
+            + 添加评语
+          </button>
         )}
       </div>
 

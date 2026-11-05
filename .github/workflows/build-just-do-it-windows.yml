@@ -1,10 +1,10 @@
-name: Windows build
+name: Build Just Do It Windows
 
 on:
+  workflow_dispatch:
   push:
-    branches: [feature/ai-batch-import]
-  pull_request:
-    branches: [main]
+    branches:
+      - feature/ai-batch-import
 
 jobs:
   build-windows:
@@ -19,10 +19,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run build
-      - run: npm run dist:win
+      - run: npm run dist
       - uses: actions/upload-artifact@v4
         with:
-          name: ApexTodo-AI-Companion-Windows-x64
-          path: release/*.exe
+          name: Just-Do-It-Windows-x64
+          path: |
+            release/Just-Do-It-Windows-x64.exe
+            release/Just-Do-It-Windows-x64.zip
           if-no-files-found: error
+          retention-days: 30

@@ -18,7 +18,6 @@ import {
   resolveLocale,
   translate
 } from '../main/i18n';
-import { BatchImportCandidate, createBatchImportPreview } from '../main/batchImport';
 import { SortableTaskItem } from './components/SortableTaskItem';
 import {
   ApexLogo,
@@ -48,6 +47,9 @@ const defaultSettings: AppSettings = {
   windowOpacity: 0.96,
   theme: 'light',
   language: 'system',
+  projects: [],
+  activeProjectId: '',
+  workspaceView: 'focus',
   webdav: {
     enabled: false,
     url: '',
@@ -57,6 +59,9 @@ const defaultSettings: AppSettings = {
     intervalMinutes: 60
   }
 };
+
+const INDEPENDENT_TARGET = '__independent__';
+type BatchCandidate = { id: string; text: string; completed: boolean; duplicate: boolean; selected: boolean };
 
 function formatShortcutForDisplay(shortcut: string, locale: SupportedLocale) {
   if (!shortcut) {
@@ -186,9 +191,6 @@ function useSystemDark() {
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [newTaskText, setNewTaskText] = useState('');
-  const [batchImportOpen, setBatchImportOpen] = useState(false);
-  const [batchImportText, setBatchImportText] = useState('');
-  const [batchCandidates, setBatchCandidates] = useState<BatchImportCandidate[]>([]);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<AppSettings>(defaultSettings);
@@ -198,6 +200,9 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [codexUsage, setCodexUsage] = useState<CodexUsage | null>(null);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchText, setBatchText] = useState('');
+  const [batchCandidates, setBatchCandidates] = useState<BatchCandidate[]>([]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const dragStyle = { WebkitAppRegion: 'drag' } as CSSProperties;
@@ -287,9 +292,15 @@ export default function App() {
     };
   }, [isCapturingShortcut]);
 
-  const openTasks = useMemo(() => state?.tasks.filter((task) => !task.completed) ?? [], [state]);
-  const completedTasks = useMemo(() => state?.tasks.filter((task) => task.completed) ?? [], [state]);
-  const selectedImportCount = batchCandidates.filter((candidate) => candidate.selected).length;
+  const activeTarget = state?.settings.activeProjectId || INDEPENDENT_TARGET;
+  const workspaceView = state?.settings.workspaceView || 'focus';
+  const visibleTasks = useMemo(() => {
+    const all = state?.tasks ?? [];
+    if (workspaceView === 'all') return all;
+    return all.filter((task) => activeTarget === INDEPENDENT_TARGET ? !task.projectId : task.projectId === activeTarget);
+  }, [state, workspaceView, activeTarget]);
+  const openTasks = useMemo(() => visibleTasks.filter((task) => !task.completed), [visibleTasks]);
+  const completedTasks = useMemo(() => visibleTasks.filter((task) => task.completed), [visibleTasks]);
 
   async function refreshCodexUsage() {
     setUsageRefreshing(true);
@@ -349,40 +360,11 @@ export default function App() {
     }
 
     try {
-      const next = await window.todoApi.addTask(text);
+      const next = await window.todoApi.addTaskToProject(text, activeTarget === INDEPENDENT_TARGET ? undefined : activeTarget);
       setState(next);
       setNewTaskText('');
     } catch {
       notifyError(t('error.addTask'));
-      void refreshState();
-    }
-  }
-
-  function previewBatchImport() {
-    const preview = createBatchImportPreview(batchImportText, state?.tasks ?? []);
-    setBatchCandidates(preview);
-    if (preview.length === 0) {
-      notifyError(t('batch.empty'));
-    }
-  }
-
-  async function importSelectedTasks() {
-    const selected = batchCandidates.filter((candidate) => candidate.selected);
-    if (selected.length === 0) {
-      notifyError(t('batch.noneSelected'));
-      return;
-    }
-
-    try {
-      const next = await window.todoApi.importTasks(
-        selected.map(({ text, completed }) => ({ text, completed }))
-      );
-      setState(next);
-      setBatchImportOpen(false);
-      setBatchImportText('');
-      setBatchCandidates([]);
-    } catch {
-      notifyError(t('error.importTask'));
       void refreshState();
     }
   }
@@ -412,6 +394,66 @@ export default function App() {
       notifyError(t('error.saveTask'));
       void refreshState();
     }
+  }
+
+  async function updateTaskComment(taskId: string, comment: string) {
+    try {
+      setState(await window.todoApi.updateTaskComment(taskId, comment));
+    } catch {
+      notifyError('评语保存失败');
+      void refreshState();
+    }
+  }
+
+  async function updateWorkspace(partial: Partial<Pick<AppSettings, 'activeProjectId' | 'workspaceView'>>) {
+    try {
+      const next = await window.todoApi.updateSettings(partial);
+      setState(next);
+      setSettingsDraft(next.settings);
+    } catch {
+      notifyError('视图设置保存失败');
+    }
+  }
+
+  async function addProject() {
+    const title = window.prompt('项目名称');
+    if (!title?.trim()) return;
+    setState(await window.todoApi.addProject(title));
+  }
+
+  async function renameProject() {
+    const project = state?.settings.projects.find((item) => item.id === activeTarget);
+    if (!project) return;
+    const title = window.prompt('修改项目名称', project.title);
+    if (!title?.trim()) return;
+    setState(await window.todoApi.updateProject(project.id, title));
+  }
+
+  function parseBatch() {
+    const existing = new Set(visibleTasks.map((task) => task.text.replace(/\s+/g, ' ').trim().toLocaleLowerCase()));
+    const seen = new Set<string>();
+    const candidates = batchText.split(/\r?\n/).map((line) => {
+      const checkbox = line.match(/^\s*[-*+]?\s*\[([ xX])\]\s*(.+)$/);
+      const completed = checkbox?.[1].toLowerCase() === 'x';
+      const raw = checkbox?.[2] ?? line;
+      const text = raw.trim().replace(/^#{1,6}\s+/, '').replace(/^(?:[-*+]\s+|\d+[.)、]\s*|\(\d+\)\s*)/, '').trim();
+      if (!text) return null;
+      const key = text.replace(/\s+/g, ' ').toLocaleLowerCase();
+      const duplicate = existing.has(key) || seen.has(key);
+      seen.add(key);
+      return { id: crypto.randomUUID(), text, completed, duplicate, selected: !duplicate };
+    }).filter((item): item is BatchCandidate => Boolean(item));
+    setBatchCandidates(candidates);
+  }
+
+  async function importBatch() {
+    const entries = batchCandidates.filter((item) => item.selected).map(({ text, completed }) => ({ text, completed }));
+    if (!entries.length) return;
+    const next = await window.todoApi.batchAddTasks(entries, activeTarget === INDEPENDENT_TARGET ? undefined : activeTarget);
+    setState(next);
+    setBatchOpen(false);
+    setBatchText('');
+    setBatchCandidates([]);
   }
 
   async function onDragEnd(event: DragEndEvent) {
@@ -559,7 +601,7 @@ export default function App() {
         <header className="flex h-10 flex-shrink-0 items-center justify-between px-3" style={dragStyle}>
           <div className="flex items-center gap-2">
             <ApexLogo size={20} />
-            <span className="text-[13px] font-semibold tracking-wide">ApexTodo</span>
+            <span className="text-[13px] font-semibold tracking-wide">Just Do It</span>
             {state?.settings.desktopPinned && (
               <span className="h-2 w-2 rounded-full bg-[var(--success)]" title={t('window.pinned')} />
             )}
@@ -572,14 +614,7 @@ export default function App() {
             >
               {effectiveTheme === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />}
             </button>
-            <button
-              className="ghost-icon"
-              onClick={() => {
-                setBatchImportOpen(false);
-                setSettingsOpen((v) => !v);
-              }}
-              title={t('common.settings')}
-            >
+            <button className="ghost-icon" onClick={() => setSettingsOpen((v) => !v)} title={t('common.settings')}>
               <SettingsIcon size={15} />
             </button>
             <button className="ghost-icon" onClick={() => void window.todoApi.minimizeWindow()} title={t('common.minimize')}>
@@ -631,6 +666,21 @@ export default function App() {
           <span>{t('task.count', { count: openTasks.length })}</span>
         </div>
 
+        <div className="mx-3 mb-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2" style={noDragStyle}>
+          <div className="mb-2 grid grid-cols-2 gap-1 rounded-md bg-[var(--surface-2)] p-1">
+            <button className={`rounded px-2 py-1 text-[11px] ${workspaceView === 'focus' ? 'bg-[var(--text)] text-[var(--bg)]' : 'text-[var(--text-2)]'}`} onClick={() => void updateWorkspace({ workspaceView: 'focus' })}>专注视图</button>
+            <button className={`rounded px-2 py-1 text-[11px] ${workspaceView === 'all' ? 'bg-[var(--text)] text-[var(--bg)]' : 'text-[var(--text-2)]'}`} onClick={() => void updateWorkspace({ workspaceView: 'all' })}>全部视图</button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select className="field min-w-0 flex-1 !py-1.5 text-[12px]" value={activeTarget} onChange={(event) => void updateWorkspace({ activeProjectId: event.target.value === INDEPENDENT_TARGET ? '' : event.target.value })}>
+              {state?.settings.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              <option value={INDEPENDENT_TARGET}>独立任务</option>
+            </select>
+            <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => void addProject()}>+ 项目</button>
+            {activeTarget !== INDEPENDENT_TARGET && <button className="ghost-text !px-1 !py-1 text-[11px]" onClick={() => void renameProject()}>改名</button>}
+          </div>
+        </div>
+
         {/* 命令式输入 */}
         <div className="flex-shrink-0 px-3 pb-3 pt-1">
           <div className="group/input flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2 transition-all duration-200 focus-within:border-[var(--accent)] focus-within:shadow-[0_0_0_3px_var(--accent-soft)]">
@@ -652,20 +702,6 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex-shrink-0 px-3 pb-2">
-          <button
-            type="button"
-            className="ghost-text w-full justify-center"
-            onClick={() => {
-              setSettingsOpen(false);
-              setBatchImportOpen(true);
-            }}
-          >
-            <PlusIcon size={13} />
-            {t('batch.open')}
-          </button>
-        </div>
-
         {/* 任务列表 */}
         <main className="min-h-0 flex-1 overflow-y-auto px-3 pb-1">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => void onDragEnd(event)}>
@@ -678,6 +714,8 @@ export default function App() {
                     onToggle={toggleTask}
                     onDelete={deleteTask}
                     onUpdateText={updateTaskText}
+                    onUpdateComment={updateTaskComment}
+                    projectTitle={workspaceView === 'all' ? state?.settings.projects.find((project) => project.id === task.projectId)?.title || '独立任务' : undefined}
                     locale={locale}
                   />
                 ))}
@@ -722,13 +760,14 @@ export default function App() {
                         type="button"
                         onClick={() => void toggleTask(task.id, false)}
                         title={t('task.markIncomplete')}
-                        className="grid h-[18px] w-[18px] flex-shrink-0 place-items-center self-center rounded-full border border-[var(--success)] bg-[var(--success)] text-white"
+                        className="grid h-[18px] w-[18px] flex-shrink-0 place-items-center self-center rounded-full border border-[var(--success)] bg-[var(--success)] text-[var(--bg)]"
                       >
                         <CheckIcon size={11} strokeWidth={3} />
                       </button>
-                      <p className="min-w-0 flex-1 truncate text-[13px] leading-[18px] text-[var(--text-3)] line-through">
-                        {task.text}
-                      </p>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] leading-[18px] text-[var(--text-3)] line-through">{task.text}</p>
+                        {task.comment && <p className="mt-1 line-clamp-2 text-[11px] text-[var(--text-3)]">{task.comment}</p>}
+                      </div>
                       <span
                         className="flex-shrink-0 text-[10px] tabular-nums text-[var(--text-3)]"
                         title={dayjs(task.createdAt).isValid() ? dayjs(task.createdAt).format('YYYY-MM-DD HH:mm') : task.createdAt}
@@ -754,88 +793,32 @@ export default function App() {
           )}
         </main>
 
-        {batchImportOpen && (
-          <section className="settings-panel">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-semibold">{t('batch.title')}</p>
-              <button className="ghost-icon" onClick={() => setBatchImportOpen(false)} title={t('common.close')}>
-                <CloseIcon size={15} />
-              </button>
-            </div>
+        <div className="flex-shrink-0 border-t border-[var(--line)] p-3">
+          <button className="btn-primary w-full" onClick={() => setBatchOpen(true)}>批量粘贴 + 解析</button>
+        </div>
 
-            <textarea
-              value={batchImportText}
-              onChange={(event) => {
-                setBatchImportText(event.target.value);
-                setBatchCandidates([]);
-              }}
-              className="field min-h-32 resize-y text-[13px] leading-5"
-              placeholder={t('batch.pastePlaceholder')}
-              autoFocus
-            />
-            <button
-              type="button"
-              className="btn-primary mt-3"
-              onClick={previewBatchImport}
-              disabled={!batchImportText.trim()}
-            >
-              {t('batch.parse')}
-            </button>
-
-            {batchCandidates.length > 0 && (
-              <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
-                <p className="setting-group-label !mt-0">{t('batch.preview')}</p>
-                <div className="space-y-2">
-                  {batchCandidates.map((candidate, index) => (
-                    <label
-                      key={`${candidate.text}-${index}`}
-                      className="flex cursor-pointer items-start gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={candidate.selected}
-                        onChange={(event) =>
-                          setBatchCandidates((current) =>
-                            current.map((item, itemIndex) =>
-                              itemIndex === index ? { ...item, selected: event.target.checked } : item
-                            )
-                          )
-                        }
-                      />
-                      <span className="min-w-0 flex-1 text-[13px] leading-5">
-                        <span className={candidate.completed ? 'line-through text-[var(--text-2)]' : ''}>
-                          {candidate.text}
-                        </span>
-                        {candidate.duplicate && (
-                          <span className="mt-0.5 block text-[10px] text-amber-500">
-                            {t('batch.duplicate')}
-                          </span>
-                        )}
-                      </span>
+        {batchOpen && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 p-3" style={noDragStyle}>
+            <section className="flex max-h-[88vh] w-full flex-col rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 shadow-2xl">
+              <div className="mb-3 flex items-center justify-between">
+                <div><p className="text-sm font-semibold">批量导入</p><p className="text-[11px] text-[var(--text-3)]">支持编号、Markdown 和复选框；重复项默认跳过</p></div>
+                <button className="ghost-icon" onClick={() => setBatchOpen(false)}><CloseIcon size={15} /></button>
+              </div>
+              <textarea className="field min-h-[120px] resize-y text-[12px]" value={batchText} onChange={(event) => setBatchText(event.target.value)} placeholder={'1. 完成需求梳理\n- [ ] 完成界面开发\n- [x] 建立测试清单'} />
+              <button className="btn-primary mt-2" onClick={parseBatch}>解析预览</button>
+              {batchCandidates.length > 0 && (
+                <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
+                  {batchCandidates.map((item) => (
+                    <label key={item.id} className="flex items-start gap-2 rounded border border-[var(--line)] bg-[var(--surface)] p-2 text-[12px]">
+                      <input type="checkbox" checked={item.selected} onChange={(event) => setBatchCandidates((prev) => prev.map((candidate) => candidate.id === item.id ? { ...candidate, selected: event.target.checked } : candidate))} />
+                      <span className="min-w-0 flex-1">{item.text}{item.duplicate && <small className="ml-2 text-[var(--text-3)]">重复，默认跳过</small>}</span>
                     </label>
                   ))}
                 </div>
-              </div>
-            )}
-
-            <div className="mt-4 flex gap-2">
-              <button
-                type="button"
-                className="btn-primary flex-1"
-                onClick={() => void importSelectedTasks()}
-                disabled={selectedImportCount === 0}
-              >
-                {t('batch.importSelected')} · {selectedImportCount}
-              </button>
-              <button
-                type="button"
-                className="ghost-text flex-1 justify-center"
-                onClick={() => setBatchImportOpen(false)}
-              >
-                {t('common.cancel')}
-              </button>
-            </div>
-          </section>
+              )}
+              <button className="btn-primary mt-3" disabled={!batchCandidates.some((item) => item.selected)} onClick={() => void importBatch()}>导入已选择任务</button>
+            </section>
+          </div>
         )}
 
         {/* 设置面板 */}

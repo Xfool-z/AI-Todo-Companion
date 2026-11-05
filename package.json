@@ -1,7 +1,7 @@
 {
-  "name": "apex-todo-ai-companion",
-  "version": "1.2.2",
-  "description": "ApexTodo AI Companion desktop widget with batch task import",
+  "name": "just-do-it",
+  "version": "0.1.0",
+  "description": "Just Do It local project todo desktop widget",
   "main": "dist-electron/main.js",
   "author": "BigWatermelon",
   "license": "GPL-3.0-only",
@@ -20,9 +20,8 @@
     "test": "npm run build:main && node --test tests/markdown.test.cjs tests/sync.test.cjs tests/i18n.test.cjs tests/codexUsage.test.cjs tests/batchImport.test.cjs",
     "test:system": "node scripts/system-smoke.mjs",
     "preview": "node ./node_modules/vite/dist/node/cli.js preview",
-    "dist": "npm run build && electron-builder --win appx --x64",
-    "icons": "node scripts/generate-icons.mjs",
-    "dist:win": "npm run build && electron-builder --win nsis --x64"
+    "dist": "npm run build && electron-builder --win portable zip --x64",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -54,8 +53,9 @@
     "wait-on": "^9.0.4"
   },
   "build": {
-    "appId": "com.xfoolz.apextodo.aicompanion",
-    "productName": "ApexTodo AI Companion",
+    "appId": "com.justdoit.desktop",
+    "productName": "Just Do It",
+    "artifactName": "Just-Do-It-Windows-${arch}.${ext}",
     "asar": true,
     "compression": "maximum",
     "electronLanguages": [
@@ -72,21 +72,14 @@
     ],
     "win": {
       "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "appx",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
+      "target": ["portable", "zip"]
     },
     "appx": {
-      "identityName": "Xfoolz.ApexTodoAICompanion",
+      "identityName": "BigWatermelon.ApexTodo",
       "publisher": "CN=3E0A3275-0795-4C6C-B5B3-A350C4BC8567",
       "publisherDisplayName": "BigWatermelon",
-      "applicationId": "ApexTodoAICompanion",
-      "displayName": "ApexTodo AI Companion",
+      "applicationId": "ApexTodo",
+      "displayName": "ApexTodo",
       "backgroundColor": "#0ccf6c",
       "languages": [
         "zh-CN",

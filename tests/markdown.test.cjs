@@ -29,3 +29,20 @@ test('createTaskFromText collapses multiline whitespace', () => {
   assert.equal(task.completed, false);
   assert.match(task.createdAt, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
 });
+
+test('round-trips project and comment metadata without changing readable task text', () => {
+  const source = [{
+    id: '1',
+    text: 'finish desktop build',
+    completed: false,
+    createdAt: '2026-11-05 15:30',
+    projectId: 'project-1',
+    comment: 'waiting for final verification'
+  }];
+  const markdown = stringifyMarkdownTasks(source);
+  assert.match(markdown, /^- \[ \] finish desktop build/);
+  assert.match(markdown, /<!-- just-do-it:/);
+  const [parsed] = parseMarkdownTasks(markdown);
+  assert.equal(parsed.projectId, 'project-1');
+  assert.equal(parsed.comment, 'waiting for final verification');
+});
