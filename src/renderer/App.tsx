@@ -203,6 +203,7 @@ export default function App() {
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchText, setBatchText] = useState('');
   const [batchCandidates, setBatchCandidates] = useState<BatchCandidate[]>([]);
+  const [projectEditor, setProjectEditor] = useState<{ mode: 'add' | 'rename'; title: string } | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const dragStyle = { WebkitAppRegion: 'drag' } as CSSProperties;
@@ -415,18 +416,19 @@ export default function App() {
     }
   }
 
-  async function addProject() {
-    const title = window.prompt('项目名称');
-    if (!title?.trim()) return;
-    setState(await window.todoApi.addProject(title));
-  }
+  async function saveProject() {
+    const title = projectEditor?.title.trim();
+    if (!projectEditor || !title) return;
 
-  async function renameProject() {
-    const project = state?.settings.projects.find((item) => item.id === activeTarget);
-    if (!project) return;
-    const title = window.prompt('修改项目名称', project.title);
-    if (!title?.trim()) return;
-    setState(await window.todoApi.updateProject(project.id, title));
+    try {
+      const next = projectEditor.mode === 'add'
+        ? await window.todoApi.addProject(title)
+        : await window.todoApi.updateProject(activeTarget, title);
+      setState(next);
+      setProjectEditor(null);
+    } catch {
+      notifyError(projectEditor.mode === 'add' ? '项目添加失败' : '项目改名失败');
+    }
   }
 
   function parseBatch() {
@@ -676,9 +678,28 @@ export default function App() {
               {state?.settings.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
               <option value={INDEPENDENT_TARGET}>独立任务</option>
             </select>
-            <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => void addProject()}>+ 项目</button>
-            {activeTarget !== INDEPENDENT_TARGET && <button className="ghost-text !px-1 !py-1 text-[11px]" onClick={() => void renameProject()}>改名</button>}
+            <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => setProjectEditor({ mode: 'add', title: '' })}>+ 项目</button>
+            {activeTarget !== INDEPENDENT_TARGET && <button className="ghost-text !px-1 !py-1 text-[11px]" onClick={() => setProjectEditor({ mode: 'rename', title: state?.settings.projects.find((project) => project.id === activeTarget)?.title || '' })}>改名</button>}
           </div>
+          {projectEditor && (
+            <div className="mt-2 flex items-center gap-1.5">
+              <input
+                autoFocus
+                className="field min-w-0 flex-1 !py-1.5 text-[12px]"
+                value={projectEditor.title}
+                onChange={(event) => setProjectEditor({ ...projectEditor, title: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveProject();
+                  if (event.key === 'Escape') setProjectEditor(null);
+                }}
+                placeholder={projectEditor.mode === 'add' ? '输入项目名称' : '修改项目名称'}
+              />
+              <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => void saveProject()} disabled={!projectEditor.title.trim()}>
+                保存
+              </button>
+              <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => setProjectEditor(null)}>取消</button>
+            </div>
+          )}
         </div>
 
         {/* 命令式输入 */}
