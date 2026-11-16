@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { watch, FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { AppSettings, TodoItem } from '../shared/types';
@@ -9,6 +9,17 @@ import { parseMarkdownTasks, stringifyMarkdownTasks } from './markdown';
 const SETTINGS_FILE = 'settings.json';
 const TODO_FILE_NAME = 'todo.md';
 const ENCRYPTED_PASSWORD_PREFIX = 'safeStorage:';
+
+async function writeFileAtomic(targetPath: string, content: string) {
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempPath, content, 'utf-8');
+  try {
+    await rename(tempPath, targetPath);
+  } catch (error) {
+    await unlink(tempPath).catch(() => undefined);
+    throw error;
+  }
+}
 
 function getDefaultTodoPath() {
   const baseDir = path.join(app.getPath('documents'), 'Just Do It');
@@ -75,6 +86,24 @@ function settingsForDisk(settings: AppSettings): AppSettings {
   };
 }
 
+function parseSettingsContent(raw: string): AppSettings {
+  const parsed = JSON.parse(raw) as Partial<AppSettings> & { launchAtStartup?: unknown };
+  const { launchAtStartup: _legacyLaunchAtStartup, ...currentSettings } = parsed;
+  const webdav = {
+    ...defaultSettings().webdav,
+    ...currentSettings.webdav
+  };
+  return {
+    ...defaultSettings(),
+    ...currentSettings,
+    language: normalizeLocalePreference(currentSettings.language),
+    webdav: {
+      ...webdav,
+      password: decryptWebDavPassword(webdav.password)
+    }
+  };
+}
+
 export class StorageService {
   private settingsPath: string;
   private watcher: FSWatcher | null = null;
@@ -106,25 +135,20 @@ export class StorageService {
     }
 
     try {
-      const parsed = JSON.parse(raw) as Partial<AppSettings> & { launchAtStartup?: unknown };
-      const { launchAtStartup: _legacyLaunchAtStartup, ...currentSettings } = parsed;
-      const webdav = {
-        ...defaultSettings().webdav,
-        ...currentSettings.webdav
-      };
-      return {
-        ...defaultSettings(),
-        ...currentSettings,
-        language: normalizeLocalePreference(currentSettings.language),
-        webdav: {
-          ...webdav,
-          password: decryptWebDavPassword(webdav.password)
-        }
-      };
+      return parseSettingsContent(raw);
     } catch (error) {
       const backupPath = `${this.settingsPath}.corrupt-${Date.now()}.bak`;
       await copyFile(this.settingsPath, backupPath);
       console.error(`设置文件损坏，已备份到 ${backupPath}:`, error);
+
+      try {
+        const recovered = parseSettingsContent(await readFile(`${this.settingsPath}.bak`, 'utf-8'));
+        await this.saveSettings(recovered);
+        return recovered;
+      } catch {
+        // No usable last-known-good settings backup is available.
+      }
+
       const next = defaultSettings();
       await this.saveSettings(next);
       return next;
@@ -133,7 +157,13 @@ export class StorageService {
 
   async saveSettings(settings: AppSettings) {
     await mkdir(path.dirname(this.settingsPath), { recursive: true });
-    await writeFile(this.settingsPath, JSON.stringify(settingsForDisk(settings), null, 2), 'utf-8');
+    try {
+      parseSettingsContent(await readFile(this.settingsPath, 'utf-8'));
+      await copyFile(this.settingsPath, `${this.settingsPath}.bak`);
+    } catch {
+      // Only preserve a valid previous settings file.
+    }
+    await writeFileAtomic(this.settingsPath, JSON.stringify(settingsForDisk(settings), null, 2));
   }
 
   async ensureTodoFile(todoPath: string) {
@@ -158,7 +188,15 @@ export class StorageService {
     this.writeInProgress = true;
     try {
       const markdown = stringifyMarkdownTasks(tasks);
-      await writeFile(todoPath, `${markdown}${markdown ? '\n' : ''}`, 'utf-8');
+      try {
+        const previous = await readFile(todoPath, 'utf-8');
+        if (parseMarkdownTasks(previous).length > 0 || tasks.length === 0) {
+          await copyFile(todoPath, `${todoPath}.bak`);
+        }
+      } catch {
+        // A missing or unreadable previous file must not block the new save.
+      }
+      await writeFileAtomic(todoPath, `${markdown}${markdown ? '\n' : ''}`);
     } finally {
       setTimeout(() => {
         this.writeInProgress = false;
@@ -171,7 +209,12 @@ export class StorageService {
 
     let debounceTimer: NodeJS.Timeout | null = null;
 
-    this.watcher = watch(todoPath, () => {
+    const directory = path.dirname(todoPath);
+    const fileName = path.basename(todoPath);
+    this.watcher = watch(directory, (_eventType, changedFileName) => {
+      if (changedFileName && changedFileName.toString() !== fileName) {
+        return;
+      }
       if (this.writeInProgress) {
         return;
       }
@@ -198,3 +241,4 @@ export class StorageService {
     }
   }
 }
+

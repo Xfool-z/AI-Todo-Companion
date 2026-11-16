@@ -35,7 +35,11 @@ let showWindowAfterBootstrap = false;
 
 const storage = new StorageService((nextTasks) => {
   tasks = normalizeTaskOrder(nextTasks);
-  broadcastState();
+  if (recoverMissingProjects()) {
+    void storage.saveSettings(settings).finally(() => broadcastState());
+  } else {
+    broadcastState();
+  }
 });
 
 const syncService = new WebDavSyncService(
@@ -123,6 +127,25 @@ function normalizeTaskOrder(allTasks: TodoItem[]) {
   const openTasks = allTasks.filter((task) => !task.completed);
   const completedTasks = allTasks.filter((task) => task.completed);
   return [...openTasks, ...completedTasks];
+}
+
+function recoverMissingProjects() {
+  if (!settings) return false;
+
+  const knownIds = new Set(settings.projects.map((project) => project.id));
+  const missingIds = [...new Set(tasks.map((task) => task.projectId).filter((id): id is string => Boolean(id) && !knownIds.has(id)))];
+  if (missingIds.length === 0) return false;
+
+  const hadProjects = settings.projects.length > 0;
+  const recoveredAt = new Date().toISOString();
+  settings.projects = [
+    ...settings.projects,
+    ...missingIds.map((id, index) => ({ id, title: `恢复项目 ${index + 1}`, createdAt: recoveredAt }))
+  ];
+  if (!hadProjects && !settings.activeProjectId) {
+    settings.activeProjectId = missingIds[0];
+  }
+  return true;
 }
 
 function currentState(): AppState {
@@ -847,7 +870,15 @@ function setupIpcHandlers() {
 
     if (partial.todoFilePath && partial.todoFilePath !== prevTodoPath) {
       await storage.ensureTodoFile(settings.todoFilePath);
-      tasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+      const nextTasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+      if (nextTasks.length === 0 && tasks.length > 0) {
+        await storage.writeTasks(settings.todoFilePath, tasks);
+      } else {
+        tasks = nextTasks;
+      }
+      if (recoverMissingProjects()) {
+        await storage.saveSettings(settings);
+      }
       storage.watchTodoFile(settings.todoFilePath);
     }
 
@@ -862,6 +893,9 @@ function setupIpcHandlers() {
     try {
       await syncService.sync(settings.todoFilePath);
       tasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+      if (recoverMissingProjects()) {
+        await storage.saveSettings(settings);
+      }
       broadcastState();
       return {
         ok: true,
@@ -899,6 +933,9 @@ async function bootstrap() {
   }
   await storage.saveSettings(settings);
   tasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+  if (recoverMissingProjects()) {
+    await storage.saveSettings(settings);
+  }
   storage.watchTodoFile(settings.todoFilePath);
 
   setupIpcHandlers();
@@ -975,3 +1012,4 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+

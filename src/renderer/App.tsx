@@ -371,6 +371,9 @@ export default function App() {
   }
 
   async function toggleTask(taskId: string, completed: boolean) {
+    if (completed) {
+      setCompletedOpen(true);
+    }
     try {
       setState(await window.todoApi.toggleTask(taskId, completed));
     } catch {
@@ -1060,3 +1063,4 @@ export default function App() {
     </div>
   );
 }
+

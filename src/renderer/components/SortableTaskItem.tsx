@@ -1,6 +1,6 @@
 import { CSS } from '@dnd-kit/utilities';
 import { useSortable } from '@dnd-kit/sortable';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { TodoItem } from '../../shared/types';
 import { SupportedLocale, translate } from '../../main/i18n';
@@ -22,6 +22,7 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
   const [draftText, setDraftText] = useState(task.text);
   const [commentOpen, setCommentOpen] = useState(Boolean(task.comment));
   const [comment, setComment] = useState(task.comment || '');
+  const commentTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (!isEditing) {
@@ -33,6 +34,15 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
     setComment(task.comment || '');
     if (task.comment) setCommentOpen(true);
   }, [task.comment]);
+
+  useEffect(() => {
+    const textarea = commentTextareaRef.current;
+    if (!textarea || !commentOpen) return;
+    textarea.style.height = 'auto';
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 72), 240);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 240 ? 'auto' : 'hidden';
+  }, [comment, commentOpen]);
 
   function submitEdit() {
     const next = draftText.trim();
@@ -136,6 +146,7 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
 
         {!isEditing && (commentOpen || task.comment) && (
           <textarea
+            ref={commentTextareaRef}
             value={comment}
             onChange={(event) => setComment(event.target.value)}
             onBlur={() => {
@@ -144,8 +155,8 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
               if (!next) setCommentOpen(false);
             }}
             placeholder="填写评语：完成情况、问题或下一步…"
-            rows={2}
-            className="field mt-2 min-h-[52px] resize-y !py-2 text-[12px]"
+            rows={3}
+            className="field mt-2 min-h-[72px] max-h-[240px] resize-none !py-2 text-[12px] leading-5"
           />
         )}
         {!isEditing && !commentOpen && !task.comment && (
@@ -192,3 +203,4 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
     </div>
   );
 }
+
