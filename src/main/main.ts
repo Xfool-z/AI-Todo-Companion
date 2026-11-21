@@ -25,6 +25,7 @@ app.setName('Just Do It');
 app.setPath('userData', path.join(app.getPath('appData'), 'Just Do It'));
 
 let mainWindow: BrowserWindow | null = null;
+let ballWindow: BrowserWindow | null = null;
 let settings: AppSettings;
 let tasks: TodoItem[] = [];
 let lastSyncTime: string | undefined;
@@ -133,7 +134,7 @@ function recoverMissingProjects() {
   if (!settings) return false;
 
   const knownIds = new Set(settings.projects.map((project) => project.id));
-  const missingIds = [...new Set(tasks.map((task) => task.projectId).filter((id): id is string => Boolean(id) && !knownIds.has(id)))];
+  const missingIds = [...new Set(tasks.map((task) => task.projectId).filter((id): id is string => typeof id === 'string' && id.length > 0 && !knownIds.has(id)))];
   if (missingIds.length === 0) return false;
 
   const hadProjects = settings.projects.length > 0;
@@ -194,6 +195,7 @@ function pushNotification(text: string) {
 }
 
 function showMainWindow() {
+  ballWindow?.hide();
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
@@ -645,11 +647,50 @@ function createWindow(startHidden: boolean) {
   applyWindowMode();
 }
 
+function showFloatingBall() {
+  if (!ballWindow || ballWindow.isDestroyed()) {
+    const area = screen.getPrimaryDisplay().workArea;
+    const position = settings.ballPosition;
+    const targetArea = position && Number.isFinite(position.x) && Number.isFinite(position.y)
+      ? screen.getDisplayNearestPoint(position).workArea : area;
+    ballWindow = new BrowserWindow({
+      width: 64, height: 64,
+      x: Math.round(Math.min(Math.max(position?.x ?? area.x + area.width - 90, targetArea.x), targetArea.x + targetArea.width - 64)),
+      y: Math.round(Math.min(Math.max(position?.y ?? area.y + 100, targetArea.y), targetArea.y + targetArea.height - 64)),
+      frame: false, transparent: true, resizable: false, skipTaskbar: true, alwaysOnTop: true,
+      title: 'Just Do It 悬浮球',
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+    });
+    const ball = ballWindow;
+    ball.on('moved', () => {
+      const { x, y } = ball.getBounds();
+      settings.ballPosition = { x, y };
+      void storage.saveSettings(settings).catch(() => undefined);
+    });
+    ball.on('closed', () => { ballWindow = null; });
+    if (process.env.VITE_DEV_SERVER_URL) {
+      void ball.loadURL(`${process.env.VITE_DEV_SERVER_URL}/?ball=1`);
+    } else {
+      void ball.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { ball: '1' } });
+    }
+  }
+  mainWindow?.hide();
+  ballWindow.show();
+}
+
 function setupIpcHandlers() {
   ipcMain.handle('app:get-state', async () => currentState());
   ipcMain.handle('codex:get-usage', async () => getCodexUsage(getResolvedLocale()));
   ipcMain.handle('window:minimize', () => {
-    mainWindow?.minimize();
+    if (settings.floatingBall) {
+      showFloatingBall();
+    } else {
+      mainWindow?.minimize();
+    }
+  });
+  ipcMain.handle('window:expand', () => showMainWindow());
+  ipcMain.handle('clipboard:write', (_event, text: string) => {
+    if (typeof text === 'string') clipboard.writeText(text);
   });
 
   ipcMain.handle('window:close', () => {
@@ -801,12 +842,24 @@ function setupIpcHandlers() {
     return currentState();
   });
 
-  ipcMain.handle('project:delete', async (_event, projectId: string) => {
-    settings.projects = settings.projects.filter((project) => project.id !== projectId);
-    if (settings.activeProjectId === projectId) settings.activeProjectId = settings.projects[0]?.id || '';
-    tasks = tasks.map((task) => task.projectId === projectId ? { ...task, projectId: undefined } : task);
-    await storage.saveSettings(settings);
+  ipcMain.handle('task:move', async (_event, taskId: string, projectId: string) => {
+    if (projectId && !settings.projects.some((project) => project.id === projectId)) throw new Error('目标项目不存在');
+    const task = tasks.find((item) => item.id === taskId);
+    if (task) task.projectId = projectId || undefined;
     await persistTasksAndBroadcast();
+    return currentState();
+  });
+
+  ipcMain.handle('project:delete', async (_event, projectId: string, deleteTasks = false) => {
+    if (!settings.projects.some((project) => project.id === projectId)) return currentState();
+    tasks = deleteTasks
+      ? tasks.filter((task) => task.projectId !== projectId)
+      : tasks.map((task) => task.projectId === projectId ? { ...task, projectId: undefined } : task);
+    await persistTasksAndBroadcast();
+    settings.projects = settings.projects.filter((project) => project.id !== projectId);
+    if (settings.activeProjectId === projectId) settings.activeProjectId = '';
+    await storage.saveSettings(settings);
+    broadcastState();
     return currentState();
   });
 

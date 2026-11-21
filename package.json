@@ -17,7 +17,7 @@
     "build": "npm run build:renderer && npm run build:main",
     "build:renderer": "node ./node_modules/vite/dist/node/cli.js build",
     "build:main": "tsup --config tsup.config.ts",
-    "test": "npm run build:main && node --test tests/markdown.test.cjs tests/sync.test.cjs tests/i18n.test.cjs tests/codexUsage.test.cjs tests/batchImport.test.cjs",
+    "test": "npm run build:main && node --test tests/markdown.test.cjs tests/sync.test.cjs tests/i18n.test.cjs tests/codexUsage.test.cjs tests/batchImport.test.cjs tests/workspace.test.cjs",
     "test:system": "node scripts/system-smoke.mjs",
     "preview": "node ./node_modules/vite/dist/node/cli.js preview",
     "dist": "npm run build && electron-builder --win portable zip --x64",
@@ -94,3 +94,4 @@
     }
   }
 }
+

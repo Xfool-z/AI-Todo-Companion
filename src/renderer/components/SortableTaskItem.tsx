@@ -13,10 +13,11 @@ interface Props {
   onUpdateText: (id: string, text: string) => void;
   onUpdateComment: (id: string, comment: string) => void;
   projectTitle?: string;
+  projectControl?: React.ReactNode;
   locale: SupportedLocale;
 }
 
-export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpdateComment, projectTitle, locale }: Props) {
+export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpdateComment, projectTitle, projectControl, locale }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const [isEditing, setIsEditing] = useState(false);
   const [draftText, setDraftText] = useState(task.text);
@@ -97,6 +98,7 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
 
       <div className="min-w-0 flex-1 self-center">
         {projectTitle && <p className="mb-1 text-[10px] text-[var(--text-3)]">{projectTitle}</p>}
+        {projectControl}
         {isEditing ? (
           <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
             <textarea

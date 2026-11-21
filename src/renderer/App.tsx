@@ -204,6 +204,10 @@ export default function App() {
   const [batchText, setBatchText] = useState('');
   const [batchCandidates, setBatchCandidates] = useState<BatchCandidate[]>([]);
   const [projectEditor, setProjectEditor] = useState<{ mode: 'add' | 'rename'; title: string } | null>(null);
+  const [deletingProject, setDeletingProject] = useState<string | null>(null);
+  const [deleteProjectTasks, setDeleteProjectTasks] = useState(false);
+  const [aiTaskIds, setAiTaskIds] = useState<string[] | null>(null);
+  const [aiGoal, setAiGoal] = useState('请逐项制定执行计划，说明结果与验证方法。执行结束后请等待我验证，再确认任务完成。');
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const dragStyle = { WebkitAppRegion: 'drag' } as CSSProperties;
@@ -434,10 +438,28 @@ export default function App() {
     }
   }
 
+  async function deleteProject() {
+    if (!deletingProject) return;
+    try {
+      setState(await window.todoApi.deleteProject(deletingProject, deleteProjectTasks));
+      setDeletingProject(null);
+    } catch { notifyError('项目删除失败'); }
+  }
+
+  function projectControl(task: TodoItem) {
+    return <select aria-label={`移动任务：${task.text}`} className="mt-1 max-w-full bg-transparent text-[11px] text-[var(--text-3)]" value={task.projectId || ''} onChange={async (event) => {
+      try { setState(await window.todoApi.moveTask(task.id, event.target.value)); }
+      catch { notifyError('任务移动失败'); }
+    }}>
+      <option value="">独立任务</option>
+      {state?.settings.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+    </select>;
+  }
+
   function parseBatch() {
     const existing = new Set(visibleTasks.map((task) => task.text.replace(/\s+/g, ' ').trim().toLocaleLowerCase()));
     const seen = new Set<string>();
-    const candidates = batchText.split(/\r?\n/).map((line) => {
+    const candidates = batchText.split(/\r?\n/).map((line): BatchCandidate | null => {
       const checkbox = line.match(/^\s*[-*+]?\s*\[([ xX])\]\s*(.+)$/);
       const completed = checkbox?.[1].toLowerCase() === 'x';
       const raw = checkbox?.[2] ?? line;
@@ -481,7 +503,10 @@ export default function App() {
       }
       return {
         ...prev,
-        tasks: [...reordered, ...completedTasks]
+        tasks: prev.tasks.map((task) => {
+          const index = openTasks.findIndex((item) => item.id === task.id);
+          return index >= 0 ? reordered[index] : task;
+        })
       };
     });
 
@@ -498,6 +523,7 @@ export default function App() {
     try {
       const next = await window.todoApi.updateSettings({
         todoFilePath: settingsDraft.todoFilePath,
+        floatingBall: settingsDraft.floatingBall,
         globalShortcut: settingsDraft.globalShortcut,
         desktopLockPosition: settingsDraft.desktopLockPosition,
         desktopMouseThrough: settingsDraft.desktopMouseThrough,
@@ -595,6 +621,20 @@ export default function App() {
     }));
   }
 
+  if (new URLSearchParams(window.location.search).get('ball') === '1') {
+    return <div className="flex h-screen w-screen flex-col items-center justify-center rounded-full bg-black text-white" style={dragStyle}>
+      <span className="text-[10px]" title="拖动这里移动悬浮球">⠿</span>
+      <button aria-label="展开 Just Do It" title="点击展开，拖动上方圆点移动" className="h-10 w-12 rounded-full text-xl" style={noDragStyle} onClick={() => void window.todoApi.expandWindow()}>✓</button>
+    </div>;
+  }
+
+  const aiTasks = (state?.tasks || []).filter((task) => aiTaskIds?.includes(task.id));
+  const aiPackage = ['# Just Do It 工作任务包', '', '## 期望结果', aiGoal, '', '## 任务', ...aiTasks.flatMap((task) => [
+    `- [${task.completed ? 'x' : ' '}] ${task.text}`,
+    `  项目：${state?.settings.projects.find((project) => project.id === task.projectId)?.title || '独立任务'}`,
+    ...(task.comment ? [`  备注：${task.comment}`] : [])
+  ])].join('\n');
+
   return (
     <div
       data-theme={effectiveTheme}
@@ -683,7 +723,14 @@ export default function App() {
             </select>
             <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => setProjectEditor({ mode: 'add', title: '' })}>+ 项目</button>
             {activeTarget !== INDEPENDENT_TARGET && <button className="ghost-text !px-1 !py-1 text-[11px]" onClick={() => setProjectEditor({ mode: 'rename', title: state?.settings.projects.find((project) => project.id === activeTarget)?.title || '' })}>改名</button>}
+            {activeTarget !== INDEPENDENT_TARGET && <button className="ghost-text !px-1 !py-1 text-[11px]" onClick={() => { setDeletingProject(activeTarget); setDeleteProjectTasks(false); }}>删除</button>}
           </div>
+          {deletingProject && <div role="alertdialog" aria-label="删除项目" className="mt-2 space-y-2 text-xs">
+            <p>删除「{state?.settings.projects.find((p) => p.id === deletingProject)?.title}」？包含 {state?.tasks.filter((task) => task.projectId === deletingProject).length} 条任务。</p>
+            <label className="flex gap-2"><input type="checkbox" checked={deleteProjectTasks} onChange={(e) => setDeleteProjectTasks(e.target.checked)} />连同任务删除（默认移到独立任务）</label>
+            <button className="ghost-text" onClick={() => void deleteProject()}>确认删除</button>
+            <button className="ghost-text" onClick={() => setDeletingProject(null)}>取消</button>
+          </div>}
           {projectEditor && (
             <div className="mt-2 flex items-center gap-1.5">
               <input
@@ -739,6 +786,7 @@ export default function App() {
                     onDelete={deleteTask}
                     onUpdateText={updateTaskText}
                     onUpdateComment={updateTaskComment}
+                    projectControl={projectControl(task)}
                     projectTitle={workspaceView === 'all' ? state?.settings.projects.find((project) => project.id === task.projectId)?.title || '独立任务' : undefined}
                     locale={locale}
                   />
@@ -790,6 +838,7 @@ export default function App() {
                       </button>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] leading-[18px] text-[var(--text-3)] line-through">{task.text}</p>
+                        {projectControl(task)}
                         {task.comment && <p className="mt-1 line-clamp-2 text-[11px] text-[var(--text-3)]">{task.comment}</p>}
                       </div>
                       <span
@@ -818,8 +867,20 @@ export default function App() {
         </main>
 
         <div className="flex-shrink-0 border-t border-[var(--line)] p-3">
+          <button className="ghost-text mb-2 w-full" onClick={() => setAiTaskIds(visibleTasks.filter((task) => !task.completed).map((task) => task.id))}>复制任务给 AI / Agent</button>
           <button className="btn-primary w-full" onClick={() => setBatchOpen(true)}>批量粘贴 + 解析</button>
         </div>
+        {aiTaskIds !== null && <div role="dialog" aria-label="AI 任务包" className="absolute inset-0 z-50 flex flex-col gap-3 overflow-auto bg-[var(--bg)] p-4" style={noDragStyle}>
+          <div className="flex items-center justify-between"><strong>AI / Agent 任务包</strong><button className="ghost-text" onClick={() => setAiTaskIds(null)}>关闭</button></div>
+          <p className="text-xs text-[var(--text-2)]">选择当前视图的任务，复制后粘贴到你使用的 AI 对话。执行结果由你验证后勾选完成。</p>
+          <div className="max-h-40 overflow-auto">{visibleTasks.map((task) => <label key={task.id} className="flex items-start gap-2 py-1 text-xs"><input type="checkbox" checked={aiTaskIds.includes(task.id)} onChange={(event) => setAiTaskIds(event.target.checked ? [...aiTaskIds, task.id] : aiTaskIds.filter((id) => id !== task.id))} />{task.text}</label>)}</div>
+          <label className="text-xs">期望结果<textarea className="field mt-1" rows={3} value={aiGoal} onChange={(event) => setAiGoal(event.target.value)} /></label>
+          <textarea aria-label="任务包预览" className="field min-h-40 flex-1" readOnly value={aiPackage} />
+          <button className="btn-primary" disabled={aiTasks.length === 0} onClick={async () => {
+            try { await window.todoApi.copyText(aiPackage); setAiTaskIds(null); notifyError('任务包已复制，可粘贴到 AI 对话'); }
+            catch { notifyError('复制失败，请重试'); }
+          }}>复制 {aiTasks.length} 条任务</button>
+        </div>}
 
         {batchOpen && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 p-3" style={noDragStyle}>
@@ -902,6 +963,10 @@ export default function App() {
                 disabled={!(state?.settings.desktopPinned ?? false)}
                 onChange={(event) => setSettingsDraft((prev) => ({ ...prev, desktopMouseThrough: event.target.checked }))}
               />
+            </div>
+            <div className="setting-row">
+              <div><div className="setting-label">收起为桌面悬浮球</div><div className="setting-hint">点击顶栏减号收起，点击小球展开；拖动小球上方圆点移动。</div></div>
+              <input type="checkbox" className="toggle" checked={settingsDraft.floatingBall ?? false} onChange={(event) => setSettingsDraft((prev) => ({ ...prev, floatingBall: event.target.checked }))} />
             </div>
             <p className="setting-group-label">{t('settings.codexUsage')}</p>
             <div className="setting-row">

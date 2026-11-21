@@ -16,7 +16,8 @@ const api = {
     ipcRenderer.invoke('task:update-comment', taskId, comment) as Promise<AppState>,
   addProject: (title: string) => ipcRenderer.invoke('project:add', title) as Promise<AppState>,
   updateProject: (projectId: string, title: string) => ipcRenderer.invoke('project:update', projectId, title) as Promise<AppState>,
-  deleteProject: (projectId: string) => ipcRenderer.invoke('project:delete', projectId) as Promise<AppState>,
+  deleteProject: (projectId: string, deleteTasks = false) => ipcRenderer.invoke('project:delete', projectId, deleteTasks) as Promise<AppState>,
+  moveTask: (taskId: string, projectId: string) => ipcRenderer.invoke('task:move', taskId, projectId) as Promise<AppState>,
   reorderOpenTasks: (orderedOpenIds: string[]) =>
     ipcRenderer.invoke('task:reorder-open', orderedOpenIds) as Promise<AppState>,
   captureTask: () => ipcRenderer.invoke('task:capture') as Promise<CaptureResult>,
@@ -28,6 +29,8 @@ const api = {
   runSync: () => ipcRenderer.invoke('sync:run') as Promise<{ ok: boolean; message: string }>,
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
+  expandWindow: () => ipcRenderer.invoke('window:expand'),
+  copyText: (text: string) => ipcRenderer.invoke('clipboard:write', text),
   onStateUpdated: (handler: (state: AppState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: AppState) => handler(state);
     ipcRenderer.on('state:updated', wrapped);
@@ -46,3 +49,4 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld('todoApi', api);
+

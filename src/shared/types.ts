@@ -45,6 +45,8 @@ export interface AppSettings {
   theme: ThemeMode;
   language: LocalePreference;
   windowBounds?: WindowBoundsState;
+  floatingBall?: boolean;
+  ballPosition?: { x: number; y: number };
   projects: TodoProject[];
   activeProjectId: string;
   workspaceView: 'focus' | 'all';
@@ -88,3 +90,4 @@ export interface CodexUsage {
   fetchedAt?: string;
   message?: string;
 }
+
