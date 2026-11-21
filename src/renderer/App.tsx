@@ -47,6 +47,9 @@ const defaultSettings: AppSettings = {
   windowOpacity: 0.96,
   theme: 'light',
   language: 'system',
+  projects: [],
+  activeProjectId: '',
+  workspaceView: 'focus',
   webdav: {
     enabled: false,
     url: '',
@@ -56,6 +59,9 @@ const defaultSettings: AppSettings = {
     intervalMinutes: 60
   }
 };
+
+const INDEPENDENT_TARGET = '__independent__';
+type BatchCandidate = { id: string; text: string; completed: boolean; duplicate: boolean; selected: boolean };
 
 function formatShortcutForDisplay(shortcut: string, locale: SupportedLocale) {
   if (!shortcut) {
@@ -194,6 +200,16 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [codexUsage, setCodexUsage] = useState<CodexUsage | null>(null);
   const [usageRefreshing, setUsageRefreshing] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchText, setBatchText] = useState('');
+  const [batchCandidates, setBatchCandidates] = useState<BatchCandidate[]>([]);
+  const [projectEditor, setProjectEditor] = useState<{ mode: 'add' | 'rename'; title: string } | null>(null);
+  const [deletingProject, setDeletingProject] = useState<string | null>(null);
+  const [deleteProjectTasks, setDeleteProjectTasks] = useState(false);
+  const [aiTaskIds, setAiTaskIds] = useState<string[] | null>(null);
+  const [actionTaskId, setActionTaskId] = useState<string | null>(null);
+  const [sendingCodex, setSendingCodex] = useState(false);
+  const [aiGoal, setAiGoal] = useState('请逐项制定执行计划，说明结果与验证方法。执行结束后请等待我验证，再确认任务完成。');
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const dragStyle = { WebkitAppRegion: 'drag' } as CSSProperties;
@@ -283,8 +299,15 @@ export default function App() {
     };
   }, [isCapturingShortcut]);
 
-  const openTasks = useMemo(() => state?.tasks.filter((task) => !task.completed) ?? [], [state]);
-  const completedTasks = useMemo(() => state?.tasks.filter((task) => task.completed) ?? [], [state]);
+  const activeTarget = state?.settings.activeProjectId || INDEPENDENT_TARGET;
+  const workspaceView = state?.settings.workspaceView || 'focus';
+  const visibleTasks = useMemo(() => {
+    const all = state?.tasks ?? [];
+    if (workspaceView === 'all') return all;
+    return all.filter((task) => activeTarget === INDEPENDENT_TARGET ? !task.projectId : task.projectId === activeTarget);
+  }, [state, workspaceView, activeTarget]);
+  const openTasks = useMemo(() => visibleTasks.filter((task) => !task.completed), [visibleTasks]);
+  const completedTasks = useMemo(() => visibleTasks.filter((task) => task.completed), [visibleTasks]);
 
   async function refreshCodexUsage() {
     setUsageRefreshing(true);
@@ -344,7 +367,7 @@ export default function App() {
     }
 
     try {
-      const next = await window.todoApi.addTask(text);
+      const next = await window.todoApi.addTaskToProject(text, activeTarget === INDEPENDENT_TARGET ? undefined : activeTarget);
       setState(next);
       setNewTaskText('');
     } catch {
@@ -354,6 +377,9 @@ export default function App() {
   }
 
   async function toggleTask(taskId: string, completed: boolean) {
+    if (completed) {
+      setCompletedOpen(true);
+    }
     try {
       setState(await window.todoApi.toggleTask(taskId, completed));
     } catch {
@@ -380,6 +406,85 @@ export default function App() {
     }
   }
 
+  async function updateTaskComment(taskId: string, comment: string) {
+    try {
+      setState(await window.todoApi.updateTaskComment(taskId, comment));
+    } catch {
+      notifyError('评语保存失败');
+      void refreshState();
+    }
+  }
+
+  async function updateWorkspace(partial: Partial<Pick<AppSettings, 'activeProjectId' | 'workspaceView'>>) {
+    try {
+      const next = await window.todoApi.updateSettings(partial);
+      setState(next);
+      setSettingsDraft(next.settings);
+    } catch {
+      notifyError('视图设置保存失败');
+    }
+  }
+
+  async function saveProject() {
+    const title = projectEditor?.title.trim();
+    if (!projectEditor || !title) return;
+
+    try {
+      const next = projectEditor.mode === 'add'
+        ? await window.todoApi.addProject(title)
+        : await window.todoApi.updateProject(activeTarget, title);
+      setState(next);
+      setProjectEditor(null);
+    } catch {
+      notifyError(projectEditor.mode === 'add' ? '项目添加失败' : '项目改名失败');
+    }
+  }
+
+  async function deleteProject() {
+    if (!deletingProject) return;
+    try {
+      setState(await window.todoApi.deleteProject(deletingProject, deleteProjectTasks));
+      setDeletingProject(null);
+    } catch { notifyError('项目删除失败'); }
+  }
+
+  function projectControl(task: TodoItem) {
+    return <select aria-label={`移动任务：${task.text}`} className="mt-1 max-w-full bg-transparent text-[11px] text-[var(--text-3)]" value={task.projectId || ''} onChange={async (event) => {
+      try { setState(await window.todoApi.moveTask(task.id, event.target.value)); }
+      catch { notifyError('任务移动失败'); }
+    }}>
+      <option value="">独立任务</option>
+      {state?.settings.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+    </select>;
+  }
+
+  function parseBatch() {
+    const existing = new Set(visibleTasks.map((task) => task.text.replace(/\s+/g, ' ').trim().toLocaleLowerCase()));
+    const seen = new Set<string>();
+    const candidates = batchText.split(/\r?\n/).map((line): BatchCandidate | null => {
+      const checkbox = line.match(/^\s*[-*+]?\s*\[([ xX])\]\s*(.+)$/);
+      const completed = checkbox?.[1].toLowerCase() === 'x';
+      const raw = checkbox?.[2] ?? line;
+      const text = raw.trim().replace(/^#{1,6}\s+/, '').replace(/^(?:[-*+]\s+|\d+[.)、]\s*|\(\d+\)\s*)/, '').trim();
+      if (!text) return null;
+      const key = text.replace(/\s+/g, ' ').toLocaleLowerCase();
+      const duplicate = existing.has(key) || seen.has(key);
+      seen.add(key);
+      return { id: crypto.randomUUID(), text, completed, duplicate, selected: !duplicate };
+    }).filter((item): item is BatchCandidate => Boolean(item));
+    setBatchCandidates(candidates);
+  }
+
+  async function importBatch() {
+    const entries = batchCandidates.filter((item) => item.selected).map(({ text, completed }) => ({ text, completed }));
+    if (!entries.length) return;
+    const next = await window.todoApi.batchAddTasks(entries, activeTarget === INDEPENDENT_TARGET ? undefined : activeTarget);
+    setState(next);
+    setBatchOpen(false);
+    setBatchText('');
+    setBatchCandidates([]);
+  }
+
   async function onDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) {
@@ -400,7 +505,10 @@ export default function App() {
       }
       return {
         ...prev,
-        tasks: [...reordered, ...completedTasks]
+        tasks: prev.tasks.map((task) => {
+          const index = openTasks.findIndex((item) => item.id === task.id);
+          return index >= 0 ? reordered[index] : task;
+        })
       };
     });
 
@@ -417,6 +525,7 @@ export default function App() {
     try {
       const next = await window.todoApi.updateSettings({
         todoFilePath: settingsDraft.todoFilePath,
+        floatingBall: settingsDraft.floatingBall,
         globalShortcut: settingsDraft.globalShortcut,
         desktopLockPosition: settingsDraft.desktopLockPosition,
         desktopMouseThrough: settingsDraft.desktopMouseThrough,
@@ -514,6 +623,22 @@ export default function App() {
     }));
   }
 
+  if (new URLSearchParams(window.location.search).get('ball') === '1') {
+    return <div className="flex h-screen w-screen flex-col items-center justify-center rounded-full bg-black text-white" style={dragStyle}>
+      <span className="text-[10px]" title="拖动这里移动悬浮球">⠿</span>
+      <button aria-label="展开 Just Do It" title="点击展开，拖动上方圆点移动" className="h-10 w-12 rounded-full text-xl" style={noDragStyle} onClick={() => void window.todoApi.expandWindow()}>✓</button>
+    </div>;
+  }
+
+  const aiTasks = (state?.tasks || []).filter((task) => aiTaskIds?.includes(task.id));
+  const actionTask = state?.tasks.find((task) => task.id === actionTaskId);
+  const actionRun = state?.codexRuns?.find((run) => run.taskId === actionTaskId);
+  const aiPackage = ['# Just Do It 工作任务包', '', '## 期望结果', aiGoal, '', '## 任务', ...aiTasks.flatMap((task) => [
+    `- [${task.completed ? 'x' : ' '}] ${task.text}`,
+    `  项目：${state?.settings.projects.find((project) => project.id === task.projectId)?.title || '独立任务'}`,
+    ...(task.comment ? [`  备注：${task.comment}`] : [])
+  ])].join('\n');
+
   return (
     <div
       data-theme={effectiveTheme}
@@ -525,7 +650,7 @@ export default function App() {
         <header className="flex h-10 flex-shrink-0 items-center justify-between px-3" style={dragStyle}>
           <div className="flex items-center gap-2">
             <ApexLogo size={20} />
-            <span className="text-[13px] font-semibold tracking-wide">ApexTodo</span>
+            <span className="text-[13px] font-semibold tracking-wide">Just Do It <small className="text-[var(--text-3)]">0.2.1 试用</small></span>
             {state?.settings.desktopPinned && (
               <span className="h-2 w-2 rounded-full bg-[var(--success)]" title={t('window.pinned')} />
             )}
@@ -590,6 +715,47 @@ export default function App() {
           <span>{t('task.count', { count: openTasks.length })}</span>
         </div>
 
+        <div className="mx-3 mb-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2" style={noDragStyle}>
+          <div className="mb-2 grid grid-cols-2 gap-1 rounded-md bg-[var(--surface-2)] p-1">
+            <button className={`rounded px-2 py-1 text-[11px] ${workspaceView === 'focus' ? 'bg-[var(--text)] text-[var(--bg)]' : 'text-[var(--text-2)]'}`} onClick={() => void updateWorkspace({ workspaceView: 'focus' })}>专注视图</button>
+            <button className={`rounded px-2 py-1 text-[11px] ${workspaceView === 'all' ? 'bg-[var(--text)] text-[var(--bg)]' : 'text-[var(--text-2)]'}`} onClick={() => void updateWorkspace({ workspaceView: 'all' })}>全部视图</button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select className="field min-w-0 flex-1 !py-1.5 text-[12px]" value={activeTarget} onChange={(event) => void updateWorkspace({ activeProjectId: event.target.value === INDEPENDENT_TARGET ? '' : event.target.value })}>
+              {state?.settings.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              <option value={INDEPENDENT_TARGET}>独立任务</option>
+            </select>
+            <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => setProjectEditor({ mode: 'add', title: '' })}>+ 项目</button>
+            {activeTarget !== INDEPENDENT_TARGET && <button className="ghost-text !px-1 !py-1 text-[11px]" onClick={() => setProjectEditor({ mode: 'rename', title: state?.settings.projects.find((project) => project.id === activeTarget)?.title || '' })}>改名</button>}
+            {activeTarget !== INDEPENDENT_TARGET && <button className="ghost-text !px-1 !py-1 text-[11px]" onClick={() => { setDeletingProject(activeTarget); setDeleteProjectTasks(false); }}>删除</button>}
+          </div>
+          {deletingProject && <div role="alertdialog" aria-label="删除项目" className="mt-2 space-y-2 text-xs">
+            <p>删除「{state?.settings.projects.find((p) => p.id === deletingProject)?.title}」？包含 {state?.tasks.filter((task) => task.projectId === deletingProject).length} 条任务。</p>
+            <label className="flex gap-2"><input type="checkbox" checked={deleteProjectTasks} onChange={(e) => setDeleteProjectTasks(e.target.checked)} />连同任务删除（默认移到独立任务）</label>
+            <button className="ghost-text" onClick={() => void deleteProject()}>确认删除</button>
+            <button className="ghost-text" onClick={() => setDeletingProject(null)}>取消</button>
+          </div>}
+          {projectEditor && (
+            <div className="mt-2 flex items-center gap-1.5">
+              <input
+                autoFocus
+                className="field min-w-0 flex-1 !py-1.5 text-[12px]"
+                value={projectEditor.title}
+                onChange={(event) => setProjectEditor({ ...projectEditor, title: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveProject();
+                  if (event.key === 'Escape') setProjectEditor(null);
+                }}
+                placeholder={projectEditor.mode === 'add' ? '输入项目名称' : '修改项目名称'}
+              />
+              <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => void saveProject()} disabled={!projectEditor.title.trim()}>
+                保存
+              </button>
+              <button className="ghost-text !px-2 !py-1 text-[11px]" onClick={() => setProjectEditor(null)}>取消</button>
+            </div>
+          )}
+        </div>
+
         {/* 命令式输入 */}
         <div className="flex-shrink-0 px-3 pb-3 pt-1">
           <div className="group/input flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2 transition-all duration-200 focus-within:border-[var(--accent)] focus-within:shadow-[0_0_0_3px_var(--accent-soft)]">
@@ -623,6 +789,10 @@ export default function App() {
                     onToggle={toggleTask}
                     onDelete={deleteTask}
                     onUpdateText={updateTaskText}
+                    onUpdateComment={updateTaskComment}
+                    onTaskActions={(task) => setActionTaskId(task.id)}
+                    projectControl={projectControl(task)}
+                    projectTitle={workspaceView === 'all' ? state?.settings.projects.find((project) => project.id === task.projectId)?.title || '独立任务' : undefined}
                     locale={locale}
                   />
                 ))}
@@ -661,19 +831,23 @@ export default function App() {
                   {completedTasks.map((task: TodoItem) => (
                     <div
                       key={task.id}
+                      onContextMenu={(event) => { event.preventDefault(); setActionTaskId(task.id); }}
                       className="flex items-center gap-2.5 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 transition-colors hover:border-[var(--line-strong)] hover:bg-[var(--surface-2)]"
                     >
                       <button
                         type="button"
                         onClick={() => void toggleTask(task.id, false)}
                         title={t('task.markIncomplete')}
-                        className="grid h-[18px] w-[18px] flex-shrink-0 place-items-center self-center rounded-full border border-[var(--success)] bg-[var(--success)] text-white"
+                        className="grid h-[18px] w-[18px] flex-shrink-0 place-items-center self-center rounded-full border border-[var(--success)] bg-[var(--success)] text-[var(--bg)]"
                       >
                         <CheckIcon size={11} strokeWidth={3} />
                       </button>
-                      <p className="min-w-0 flex-1 truncate text-[13px] leading-[18px] text-[var(--text-3)] line-through">
-                        {task.text}
-                      </p>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] leading-[18px] text-[var(--text-3)] line-through">{task.text}</p>
+                        {projectControl(task)}
+                        <button className="ghost-text !py-1" onClick={() => setActionTaskId(task.id)}>⋯ 任务操作</button>
+                        {task.comment && <p className="mt-1 line-clamp-2 text-[11px] text-[var(--text-3)]">{task.comment}</p>}
+                      </div>
                       <span
                         className="flex-shrink-0 text-[10px] tabular-nums text-[var(--text-3)]"
                         title={dayjs(task.createdAt).isValid() ? dayjs(task.createdAt).format('YYYY-MM-DD HH:mm') : task.createdAt}
@@ -698,6 +872,67 @@ export default function App() {
             </div>
           )}
         </main>
+
+        <div className="flex-shrink-0 border-t border-[var(--line)] p-3">
+          <button className="ghost-text mb-2 w-full" onClick={() => setAiTaskIds(visibleTasks.filter((task) => !task.completed).map((task) => task.id))}>复制任务给 AI / Agent</button>
+          <button className="btn-primary w-full" onClick={() => setBatchOpen(true)}>批量粘贴 + 解析</button>
+        </div>
+        {aiTaskIds !== null && <div role="dialog" aria-label="AI 任务包" className="absolute inset-0 z-50 flex flex-col gap-3 overflow-auto bg-[var(--bg)] p-4" style={noDragStyle}>
+          <div className="flex items-center justify-between"><strong>AI / Agent 任务包</strong><button className="ghost-text" onClick={() => setAiTaskIds(null)}>关闭</button></div>
+          <p className="text-xs text-[var(--text-2)]">选择当前视图的任务，复制后粘贴到你使用的 AI 对话。执行结果由你验证后勾选完成。</p>
+          <div className="max-h-40 overflow-auto">{visibleTasks.map((task) => <label key={task.id} className="flex items-start gap-2 py-1 text-xs"><input type="checkbox" checked={aiTaskIds.includes(task.id)} onChange={(event) => setAiTaskIds(event.target.checked ? [...aiTaskIds, task.id] : aiTaskIds.filter((id) => id !== task.id))} />{task.text}</label>)}</div>
+          <label className="text-xs">期望结果<textarea className="field mt-1" rows={3} value={aiGoal} onChange={(event) => setAiGoal(event.target.value)} /></label>
+          <textarea aria-label="任务包预览" className="field min-h-40 flex-1" readOnly value={aiPackage} />
+          <button className="btn-primary" disabled={aiTasks.length === 0} onClick={async () => {
+            try { await window.todoApi.copyText(aiPackage); setAiTaskIds(null); notifyError('任务包已复制，可粘贴到 AI 对话'); }
+            catch { notifyError('复制失败，请重试'); }
+          }}>复制 {aiTasks.length} 条任务</button>
+        </div>}
+        {actionTask && <div role="dialog" aria-label="任务操作" className="absolute inset-0 z-50 flex flex-col gap-3 overflow-auto bg-[var(--bg)] p-4" style={noDragStyle}>
+          <div className="flex items-center justify-between"><strong className="break-words">{actionTask.text}</strong><button className="ghost-text" onClick={() => setActionTaskId(null)}>关闭</button></div>
+          <button className="btn-primary" onClick={async () => {
+            const prompt = [`项目：${state?.settings.projects.find(p => p.id === actionTask.projectId)?.title || '独立任务'}`, `任务：${actionTask.text}`, actionTask.comment ? `备注：${actionTask.comment}` : ''].filter(Boolean).join('\n\n');
+            try { await window.todoApi.copyText(prompt); notifyError('任务与备注已复制'); }
+            catch { notifyError('复制失败'); }
+          }}>复制任务</button>
+          <button className="btn-primary" disabled={sendingCodex || Boolean(actionRun && ['starting', 'running', 'approval'].includes(actionRun.status))} onClick={async () => {
+            setSendingCodex(true);
+            try { setState(await window.todoApi.startCodexTask(actionTask.id)); }
+            catch (error) { notifyError(String(error instanceof Error ? error.message : 'Codex 启动失败')); }
+            finally { setSendingCodex(false); }
+          }}>{sendingCodex ? '正在连接…' : '发送给 Codex，新建对话并开始'}</button>
+          <p className="text-xs text-[var(--text-2)]">选择工作文件夹后，使用本机已登录的 Codex 执行。退出 Just Do It 会停止本次运行；会话编号可用于后续查找。</p>
+          {actionRun && <>
+            <p className="text-xs">状态：{{ starting: '连接中', running: '执行中', approval: '等待授权', review: '待验证', failed: '未完成' }[actionRun.status]}</p>
+            <p className="break-all text-xs">工作目录：{actionRun.cwd}<br />会话：{actionRun.threadId || '尚未创建'}</p>
+            <textarea className="field min-h-48 flex-1 text-xs" readOnly aria-label="Codex 执行结果" value={actionRun.output || '正在等待 Codex 返回内容…'} />
+            {['starting', 'running', 'approval'].includes(actionRun.status) && <button className="ghost-text" onClick={() => void window.todoApi.stopCodexTask(actionTask.id)}>停止执行</button>}
+          </>}
+        </div>}
+
+        {batchOpen && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/45 p-3" style={noDragStyle}>
+            <section className="flex max-h-[88vh] w-full flex-col rounded-xl border border-[var(--line)] bg-[var(--bg)] p-4 shadow-2xl">
+              <div className="mb-3 flex items-center justify-between">
+                <div><p className="text-sm font-semibold">批量导入</p><p className="text-[11px] text-[var(--text-3)]">支持编号、Markdown 和复选框；重复项默认跳过</p></div>
+                <button className="ghost-icon" onClick={() => setBatchOpen(false)}><CloseIcon size={15} /></button>
+              </div>
+              <textarea className="field min-h-[120px] resize-y text-[12px]" value={batchText} onChange={(event) => setBatchText(event.target.value)} placeholder={'1. 完成需求梳理\n- [ ] 完成界面开发\n- [x] 建立测试清单'} />
+              <button className="btn-primary mt-2" onClick={parseBatch}>解析预览</button>
+              {batchCandidates.length > 0 && (
+                <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
+                  {batchCandidates.map((item) => (
+                    <label key={item.id} className="flex items-start gap-2 rounded border border-[var(--line)] bg-[var(--surface)] p-2 text-[12px]">
+                      <input type="checkbox" checked={item.selected} onChange={(event) => setBatchCandidates((prev) => prev.map((candidate) => candidate.id === item.id ? { ...candidate, selected: event.target.checked } : candidate))} />
+                      <span className="min-w-0 flex-1">{item.text}{item.duplicate && <small className="ml-2 text-[var(--text-3)]">重复，默认跳过</small>}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <button className="btn-primary mt-3" disabled={!batchCandidates.some((item) => item.selected)} onClick={() => void importBatch()}>导入已选择任务</button>
+            </section>
+          </div>
+        )}
 
         {/* 设置面板 */}
         {settingsOpen && (
@@ -756,6 +991,10 @@ export default function App() {
                 disabled={!(state?.settings.desktopPinned ?? false)}
                 onChange={(event) => setSettingsDraft((prev) => ({ ...prev, desktopMouseThrough: event.target.checked }))}
               />
+            </div>
+            <div className="setting-row">
+              <div><div className="setting-label">收起为桌面悬浮球</div><div className="setting-hint">点击顶栏减号收起，点击小球展开；拖动小球上方圆点移动。</div></div>
+              <input type="checkbox" className="toggle" checked={settingsDraft.floatingBall ?? false} onChange={(event) => setSettingsDraft((prev) => ({ ...prev, floatingBall: event.target.checked }))} />
             </div>
             <p className="setting-group-label">{t('settings.codexUsage')}</p>
             <div className="setting-row">
@@ -917,3 +1156,4 @@ export default function App() {
     </div>
   );
 }
+

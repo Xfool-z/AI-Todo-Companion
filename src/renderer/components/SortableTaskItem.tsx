@@ -1,6 +1,6 @@
 import { CSS } from '@dnd-kit/utilities';
 import { useSortable } from '@dnd-kit/sortable';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { TodoItem } from '../../shared/types';
 import { SupportedLocale, translate } from '../../main/i18n';
@@ -11,19 +11,40 @@ interface Props {
   onToggle: (id: string, completed: boolean) => void;
   onDelete: (id: string) => void;
   onUpdateText: (id: string, text: string) => void;
+  onUpdateComment: (id: string, comment: string) => void;
+  projectTitle?: string;
+  projectControl?: React.ReactNode;
+  onTaskActions: (task: TodoItem) => void;
   locale: SupportedLocale;
 }
 
-export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, locale }: Props) {
+export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpdateComment, projectTitle, projectControl, onTaskActions, locale }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const [isEditing, setIsEditing] = useState(false);
   const [draftText, setDraftText] = useState(task.text);
+  const [commentOpen, setCommentOpen] = useState(Boolean(task.comment));
+  const [comment, setComment] = useState(task.comment || '');
+  const commentTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (!isEditing) {
       setDraftText(task.text);
     }
   }, [task.text, isEditing]);
+
+  useEffect(() => {
+    setComment(task.comment || '');
+    if (task.comment) setCommentOpen(true);
+  }, [task.comment]);
+
+  useEffect(() => {
+    const textarea = commentTextareaRef.current;
+    if (!textarea || !commentOpen) return;
+    textarea.style.height = 'auto';
+    const nextHeight = Math.min(Math.max(textarea.scrollHeight, 72), 240);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 240 ? 'auto' : 'hidden';
+  }, [comment, commentOpen]);
 
   function submitEdit() {
     const next = draftText.trim();
@@ -55,6 +76,10 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
   return (
     <div
       ref={setNodeRef}
+      onContextMenu={(event) => {
+        if ((event.target as HTMLElement).closest('input,textarea,select')) return;
+        event.preventDefault(); onTaskActions(task);
+      }}
       style={style}
       className={`group flex items-center gap-2.5 rounded-lg border px-3 py-3 transition-colors duration-150 ${
         isDragging
@@ -70,13 +95,15 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
         style={{
           borderColor: task.completed ? 'var(--success)' : 'var(--line-strong)',
           background: task.completed ? 'var(--success)' : 'transparent',
-          color: '#ffffff'
+          color: 'var(--bg)'
         }}
       >
         {task.completed && <CheckIcon size={11} strokeWidth={3} />}
       </button>
 
       <div className="min-w-0 flex-1 self-center">
+        {projectTitle && <p className="mb-1 text-[10px] text-[var(--text-3)]">{projectTitle}</p>}
+        {projectControl}
         {isEditing ? (
           <div className="space-y-1.5" onClick={(e) => e.stopPropagation()}>
             <textarea
@@ -114,7 +141,7 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
           </div>
         ) : (
           <p
-            onDoubleClick={() => setIsEditing(true)}
+            onClick={() => setIsEditing(true)}
             title={translate(locale, 'task.doubleClickEdit')}
             className={`min-w-0 flex-1 cursor-text truncate text-[13px] leading-[18px] ${
               task.completed ? 'text-[var(--text-3)] line-through' : 'text-[var(--text)]'
@@ -122,6 +149,27 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
           >
             {task.text}
           </p>
+        )}
+
+        {!isEditing && (commentOpen || task.comment) && (
+          <textarea
+            ref={commentTextareaRef}
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            onBlur={() => {
+              const next = comment.trim();
+              onUpdateComment(task.id, next);
+              if (!next) setCommentOpen(false);
+            }}
+            placeholder="填写评语：完成情况、问题或下一步…"
+            rows={3}
+            className="field mt-2 min-h-[72px] max-h-[240px] resize-none !py-2 text-[12px] leading-5"
+          />
+        )}
+        {!isEditing && !commentOpen && !task.comment && (
+          <button type="button" className="mt-1 text-[11px] text-[var(--text-3)] hover:text-[var(--text)]" onClick={() => setCommentOpen(true)}>
+            + 添加评语
+          </button>
         )}
       </div>
 
@@ -134,6 +182,7 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
             {timeLabel}
           </span>
           <div className="flex flex-shrink-0 items-center gap-0.5">
+          <button className="ghost-icon !h-7 !w-7" title="任务操作" onClick={() => onTaskActions(task)}>⋯</button>
           <button
             {...attributes}
             {...listeners}
@@ -162,3 +211,4 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, local
     </div>
   );
 }
+

@@ -5,6 +5,14 @@ export interface TodoItem {
   text: string;
   completed: boolean;
   createdAt: string;
+  projectId?: string;
+  comment?: string;
+}
+
+export interface TodoProject {
+  id: string;
+  title: string;
+  createdAt: string;
 }
 
 export interface WebDavConfig {
@@ -37,15 +45,29 @@ export interface AppSettings {
   theme: ThemeMode;
   language: LocalePreference;
   windowBounds?: WindowBoundsState;
+  floatingBall?: boolean;
+  ballPosition?: { x: number; y: number };
+  projects: TodoProject[];
+  activeProjectId: string;
+  workspaceView: 'focus' | 'all';
   webdav: WebDavConfig;
 }
 
 export interface AppState {
+  codexRuns?: CodexTaskRun[];
   tasks: TodoItem[];
   settings: AppSettings;
   lastSyncTime?: string;
   syncMessage?: string;
   resolvedLocale: SupportedLocale;
+}
+
+export interface CodexTaskRun {
+  taskId: string;
+  cwd: string;
+  threadId?: string;
+  status: 'starting' | 'running' | 'approval' | 'review' | 'failed';
+  output: string;
 }
 
 export interface SaveToastPayload {
@@ -77,3 +99,4 @@ export interface CodexUsage {
   fetchedAt?: string;
   message?: string;
 }
+

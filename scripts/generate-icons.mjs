@@ -1,4 +1,4 @@
-// 零依赖生成 ApexTodo 图标：A 字尖峰(Apex) + 腰间对勾(Todo)，2x 超采样抗锯齿。
+// 零依赖生成 Just Do It 黑白 J + 对勾图标。
 // 运行：node scripts/generate-icons.mjs
 import { mkdir, writeFile } from 'node:fs/promises';
 import { deflateSync } from 'node:zlib';
@@ -11,8 +11,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CENTER = { x: 64, y: 66 };
 const HALF = 56;
 const RADIUS = 30;
-const TOP = [12, 208, 108];
-const BOTTOM = [6, 170, 82];
+const TOP = [17, 17, 17];
+const BOTTOM = [0, 0, 0];
 
 // 字母 A / 尖峰(Apex)：外三角减内三角 + 一条水平横杠，挺拔、粗细均匀
 const OUTER = [{ x: 64, y: 16 }, { x: 27, y: 108 }, { x: 101, y: 108 }];
@@ -68,12 +68,12 @@ function rasterize(size) {
             continue;
           }
 
-          const isA = inTri(px, py, OUTER[0], OUTER[1], OUTER[2]) &&
-            !inTri(px, py, INNER[0], INNER[1], INNER[2]);
-          const bx = Math.abs(px - BAR.cx) - (BAR.halfW - BAR.radius);
-          const by = Math.abs(py - BAR.cy) - (BAR.halfH - BAR.radius);
-          const barDist = Math.hypot(Math.max(bx, 0), Math.max(by, 0)) + Math.min(Math.max(bx, by), 0) - BAR.radius;
-          const white = isA || barDist < 0 ? 1 : 0;
+          const isJ = (px >= 48 && px <= 64 && py >= 30 && py <= 88) ||
+            (px >= 30 && px <= 56 && py >= 82 && py <= 98) ||
+            (px >= 30 && px <= 44 && py >= 74 && py <= 90);
+          const isCheck = distSeg(px, py, { x: 71, y: 73 }, { x: 82, y: 84 }) < 5 ||
+            distSeg(px, py, { x: 82, y: 84 }, { x: 102, y: 57 }) < 5;
+          const white = isJ || isCheck ? 1 : 0;
 
           const t = clamp(py / 128, 0, 1);
           let rr = TOP[0] + (BOTTOM[0] - TOP[0]) * t;

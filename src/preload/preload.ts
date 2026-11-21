@@ -3,12 +3,23 @@ import { AppSettings, AppState, CaptureResult, CodexUsage, SaveToastPayload } fr
 
 const api = {
   getState: () => ipcRenderer.invoke('app:get-state') as Promise<AppState>,
+  startCodexTask: (taskId: string) => ipcRenderer.invoke('codex:start-task', taskId) as Promise<AppState>,
+  stopCodexTask: (taskId: string) => ipcRenderer.invoke('codex:stop', taskId) as Promise<void>,
   getCodexUsage: () => ipcRenderer.invoke('codex:get-usage') as Promise<CodexUsage>,
   addTask: (text: string) => ipcRenderer.invoke('task:add', text) as Promise<AppState>,
+  addTaskToProject: (text: string, projectId?: string) => ipcRenderer.invoke('task:add-to-project', text, projectId) as Promise<AppState>,
+  batchAddTasks: (entries: Array<{ text: string; completed: boolean }>, projectId?: string) =>
+    ipcRenderer.invoke('tasks:batch-add', entries, projectId) as Promise<AppState>,
   toggleTask: (taskId: string, completed: boolean) => ipcRenderer.invoke('task:toggle', taskId, completed) as Promise<AppState>,
   deleteTask: (taskId: string) => ipcRenderer.invoke('task:delete', taskId) as Promise<AppState>,
   updateTaskText: (taskId: string, text: string) =>
     ipcRenderer.invoke('task:update-text', taskId, text) as Promise<AppState>,
+  updateTaskComment: (taskId: string, comment: string) =>
+    ipcRenderer.invoke('task:update-comment', taskId, comment) as Promise<AppState>,
+  addProject: (title: string) => ipcRenderer.invoke('project:add', title) as Promise<AppState>,
+  updateProject: (projectId: string, title: string) => ipcRenderer.invoke('project:update', projectId, title) as Promise<AppState>,
+  deleteProject: (projectId: string, deleteTasks = false) => ipcRenderer.invoke('project:delete', projectId, deleteTasks) as Promise<AppState>,
+  moveTask: (taskId: string, projectId: string) => ipcRenderer.invoke('task:move', taskId, projectId) as Promise<AppState>,
   reorderOpenTasks: (orderedOpenIds: string[]) =>
     ipcRenderer.invoke('task:reorder-open', orderedOpenIds) as Promise<AppState>,
   captureTask: () => ipcRenderer.invoke('task:capture') as Promise<CaptureResult>,
@@ -20,6 +31,8 @@ const api = {
   runSync: () => ipcRenderer.invoke('sync:run') as Promise<{ ok: boolean; message: string }>,
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
+  expandWindow: () => ipcRenderer.invoke('window:expand'),
+  copyText: (text: string) => ipcRenderer.invoke('clipboard:write', text),
   onStateUpdated: (handler: (state: AppState) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, state: AppState) => handler(state);
     ipcRenderer.on('state:updated', wrapped);
@@ -38,3 +51,4 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld('todoApi', api);
+

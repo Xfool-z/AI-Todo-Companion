@@ -2,21 +2,12 @@ import { SVGProps } from 'react';
 
 type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
-// ApexTodo 品牌标：与托盘 / build/icon.ico 完全同源（同几何、同垂直渐变）
+// Just Do It 黑白品牌标。
 export const ApexLogo = ({ size = 20 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 128 128" fill="none" aria-hidden="true">
-    <defs>
-      <linearGradient id="apexLogoGrad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="128">
-        <stop offset="0" stopColor="#0cd06c" />
-        <stop offset="1" stopColor="#06aa52" />
-      </linearGradient>
-    </defs>
-    {/* 圆角底 */}
-    <rect x="8" y="10" width="112" height="112" rx="30" fill="url(#apexLogoGrad)" />
-    {/* A：白色外三角 → 同色内三角挖空 → 白色横杠 */}
-    <path d="M64 16 L27 108 L101 108 Z" fill="#ffffff" />
-    <path d="M64 50 L50.5 108 L77.5 108 Z" fill="url(#apexLogoGrad)" />
-    <rect x="49.5" y="70.7" width="29" height="8.6" rx="2" fill="#ffffff" />
+    <rect x="8" y="8" width="112" height="112" rx="28" fill="#111111" />
+    <path d="M47 34h17v48c0 19-10 30-29 30V96c8 0 12-5 12-14V34Z" fill="#ffffff" />
+    <path d="m70 72 10 10 20-23" stroke="#ffffff" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 

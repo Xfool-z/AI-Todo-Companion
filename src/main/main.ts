@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { AppSettings, AppState, CaptureResult, TodoItem, WebDavConfig, WindowBoundsState } from '../shared/types';
+import { AppSettings, AppState, CaptureResult, TodoItem, TodoProject, WebDavConfig, WindowBoundsState } from '../shared/types';
 import {
   LocalizedMessage,
   TranslationKey,
@@ -16,12 +16,18 @@ import { createTaskFromText } from './markdown';
 import { getCodexUsage } from './codexUsage';
 import { StorageService } from './storage';
 import { WebDavSyncService } from './sync';
+import { CodexTaskService } from './codexTasks';
+import { CodexTaskRun } from '../shared/types';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+A';
 const DESKTOP_INTERACT_SHORTCUT = 'CommandOrControl+Shift+Z';
 
+app.setName('Just Do It');
+app.setPath('userData', path.join(app.getPath('appData'), 'Just Do It'));
+
 let mainWindow: BrowserWindow | null = null;
+let ballWindow: BrowserWindow | null = null;
 let settings: AppSettings;
 let tasks: TodoItem[] = [];
 let lastSyncTime: string | undefined;
@@ -29,10 +35,27 @@ let statusMessage: LocalizedMessage | undefined;
 let saveWindowBoundsTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
 let showWindowAfterBootstrap = false;
+const codexRuns = new Map<string, CodexTaskRun>();
+const codexTasks = new CodexTaskService(run => {
+  codexRuns.set(run.taskId, run);
+  broadcastState();
+}, async description => {
+  showMainWindow();
+  if (!mainWindow) return false;
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'question', title: 'Codex 操作确认', message: '允许 Codex 执行此操作？',
+    detail: description, buttons: ['拒绝', '允许本次'], defaultId: 0, cancelId: 0
+  });
+  return result.response === 1;
+});
 
 const storage = new StorageService((nextTasks) => {
   tasks = normalizeTaskOrder(nextTasks);
-  broadcastState();
+  if (recoverMissingProjects()) {
+    void storage.saveSettings(settings).finally(() => broadcastState());
+  } else {
+    broadcastState();
+  }
 });
 
 const syncService = new WebDavSyncService(
@@ -122,8 +145,28 @@ function normalizeTaskOrder(allTasks: TodoItem[]) {
   return [...openTasks, ...completedTasks];
 }
 
+function recoverMissingProjects() {
+  if (!settings) return false;
+
+  const knownIds = new Set(settings.projects.map((project) => project.id));
+  const missingIds = [...new Set(tasks.map((task) => task.projectId).filter((id): id is string => typeof id === 'string' && id.length > 0 && !knownIds.has(id)))];
+  if (missingIds.length === 0) return false;
+
+  const hadProjects = settings.projects.length > 0;
+  const recoveredAt = new Date().toISOString();
+  settings.projects = [
+    ...settings.projects,
+    ...missingIds.map((id, index) => ({ id, title: `恢复项目 ${index + 1}`, createdAt: recoveredAt }))
+  ];
+  if (!hadProjects && !settings.activeProjectId) {
+    settings.activeProjectId = missingIds[0];
+  }
+  return true;
+}
+
 function currentState(): AppState {
   return {
+    codexRuns: [...codexRuns.values()],
     tasks,
     settings,
     lastSyncTime,
@@ -161,13 +204,14 @@ function pushNotification(text: string) {
   }
 
   new Notification({
-    title: 'ApexTodo',
+    title: 'Just Do It',
     body: text,
     silent: true
   }).show();
 }
 
 function showMainWindow() {
+  ballWindow?.hide();
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
   }
@@ -381,7 +425,7 @@ function updateTrayMenu() {
     }
   ]);
 
-  tray.setToolTip('ApexTodo');
+  tray.setToolTip('Just Do It');
   tray.setContextMenu(trayMenu);
 }
 
@@ -551,7 +595,7 @@ function createWindow(startHidden: boolean) {
     hasShadow: !enableTransparentWindow,
     skipTaskbar: true,
     show: !startHidden,
-    title: 'ApexTodo',
+    title: 'Just Do It',
     icon: app.isPackaged ? undefined : path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -619,11 +663,73 @@ function createWindow(startHidden: boolean) {
   applyWindowMode();
 }
 
+function showFloatingBall() {
+  if (!ballWindow || ballWindow.isDestroyed()) {
+    const area = screen.getPrimaryDisplay().workArea;
+    const position = settings.ballPosition;
+    const targetArea = position && Number.isFinite(position.x) && Number.isFinite(position.y)
+      ? screen.getDisplayNearestPoint(position).workArea : area;
+    ballWindow = new BrowserWindow({
+      width: 64, height: 64,
+      x: Math.round(Math.min(Math.max(position?.x ?? area.x + area.width - 90, targetArea.x), targetArea.x + targetArea.width - 64)),
+      y: Math.round(Math.min(Math.max(position?.y ?? area.y + 100, targetArea.y), targetArea.y + targetArea.height - 64)),
+      frame: false, transparent: true, resizable: false, skipTaskbar: true, alwaysOnTop: true,
+      title: 'Just Do It 悬浮球',
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+    });
+    const ball = ballWindow;
+    ball.on('moved', () => {
+      const { x, y } = ball.getBounds();
+      settings.ballPosition = { x, y };
+      void storage.saveSettings(settings).catch(() => undefined);
+    });
+    ball.on('closed', () => { ballWindow = null; });
+    if (process.env.VITE_DEV_SERVER_URL) {
+      void ball.loadURL(`${process.env.VITE_DEV_SERVER_URL}/?ball=1`);
+    } else {
+      void ball.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { ball: '1' } });
+    }
+  }
+  mainWindow?.hide();
+  ballWindow.show();
+}
+
 function setupIpcHandlers() {
+  ipcMain.handle('codex:stop', (_event, taskId: string) => codexTasks.stop(taskId));
+  ipcMain.handle('codex:start-task', async (_event, taskId: string) => {
+    const task = tasks.find(item => item.id === taskId);
+    if (!task || !mainWindow) throw new Error('任务不存在');
+    const previous = codexRuns.get(taskId);
+    if (previous && ['starting', 'running', 'approval'].includes(previous.status)) throw new Error('此任务正在执行');
+    const folder = await dialog.showOpenDialog(mainWindow, { title: '选择 Codex 工作文件夹', properties: ['openDirectory'] });
+    if (folder.canceled || !folder.filePaths[0]) return currentState();
+    let binary = '';
+    try {
+      const result = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$c=Get-Command codex -ErrorAction SilentlyContinue; if($c -and $c.Source.EndsWith('.exe')){$c.Source}else{$p=Get-AppxPackage OpenAI.Codex | Select-Object -First 1; if($p){Join-Path $p.InstallLocation 'app\\resources\\codex.exe'}}"], { windowsHide: true });
+      binary = result.stdout.trim();
+    } catch { /* Offer an executable picker when automatic detection is unavailable. */ }
+    if (!binary) {
+      const picker = await dialog.showOpenDialog(mainWindow, { title: '选择已安装的 codex.exe（请先在 Codex 中登录）', properties: ['openFile'], filters: [{ name: 'Codex', extensions: ['exe'] }] });
+      if (picker.canceled || !picker.filePaths[0]) return currentState();
+      binary = picker.filePaths[0];
+    }
+    const project = settings.projects.find(item => item.id === task.projectId);
+    const prompt = [`项目：${project?.title || '独立任务'}`, `任务：${task.text}`, task.comment ? `备注：${task.comment}` : '', '请开始处理此任务，说明执行结果与验证方法。完成后等待用户验证，不自动标记待办完成。'].filter(Boolean).join('\n\n');
+    codexTasks.start(binary, folder.filePaths[0], taskId, prompt);
+    return currentState();
+  });
   ipcMain.handle('app:get-state', async () => currentState());
   ipcMain.handle('codex:get-usage', async () => getCodexUsage(getResolvedLocale()));
   ipcMain.handle('window:minimize', () => {
-    mainWindow?.minimize();
+    if (settings.floatingBall) {
+      showFloatingBall();
+    } else {
+      mainWindow?.minimize();
+    }
+  });
+  ipcMain.handle('window:expand', () => showMainWindow());
+  ipcMain.handle('clipboard:write', (_event, text: string) => {
+    if (typeof text === 'string') clipboard.writeText(text);
   });
 
   ipcMain.handle('window:close', () => {
@@ -667,6 +773,25 @@ function setupIpcHandlers() {
     return currentState();
   });
 
+  ipcMain.handle('task:add-to-project', async (_event, text: string, projectId?: string) => {
+    if (!text || !text.trim()) return currentState();
+    const task = createTaskFromText(text);
+    task.projectId = projectId || undefined;
+    tasks = [task, ...tasks];
+    await persistTasksAndBroadcast('task.added', true);
+    return currentState();
+  });
+
+  ipcMain.handle('tasks:batch-add', async (_event, entries: Array<{ text: string; completed: boolean }>, projectId?: string) => {
+    const next = (Array.isArray(entries) ? entries : [])
+      .map((entry) => ({ text: String(entry?.text || '').replace(/\s+/g, ' ').trim(), completed: Boolean(entry?.completed) }))
+      .filter((entry) => entry.text)
+      .map((entry) => ({ ...createTaskFromText(entry.text), completed: entry.completed, projectId: projectId || undefined }));
+    tasks = [...tasks.filter((task) => !task.completed), ...next.filter((task) => !task.completed), ...tasks.filter((task) => task.completed), ...next.filter((task) => task.completed)];
+    await persistTasksAndBroadcast();
+    return currentState();
+  });
+
   ipcMain.handle('task:toggle', async (_event, taskId: string, completed: boolean) => {
     const target = tasks.find((task) => task.id === taskId);
     if (!target) {
@@ -677,7 +802,7 @@ function setupIpcHandlers() {
     const openTasks = tasks.filter((task) => !task.completed && task.id !== taskId);
     const completedTasks = tasks.filter((task) => task.completed && task.id !== taskId);
 
-    tasks = [...openTasks, target, ...completedTasks];
+    tasks = completed ? [...openTasks, ...completedTasks, target] : [...openTasks, target, ...completedTasks];
 
     await persistTasksAndBroadcast();
     return currentState();
@@ -695,9 +820,9 @@ function setupIpcHandlers() {
       }
     }
 
-    const restOpen = [...openMap.values()];
-    const done = tasks.filter((task) => task.completed);
-    tasks = [...reorderedOpen, ...restOpen, ...done];
+    const reorderedIds = new Set(reorderedOpen.map((task) => task.id));
+    let index = 0;
+    tasks = tasks.map((task) => !task.completed && reorderedIds.has(task.id) ? reorderedOpen[index++] : task);
 
     await persistTasksAndBroadcast();
     return currentState();
@@ -725,6 +850,55 @@ function setupIpcHandlers() {
 
     target.text = nextText;
     await persistTasksAndBroadcast();
+    return currentState();
+  });
+
+  ipcMain.handle('task:update-comment', async (_event, taskId: string, comment: string) => {
+    const target = tasks.find((task) => task.id === taskId);
+    if (!target) return currentState();
+    target.comment = String(comment || '').trim() || undefined;
+    await persistTasksAndBroadcast();
+    return currentState();
+  });
+
+  ipcMain.handle('project:add', async (_event, title: string) => {
+    const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!cleanTitle) return currentState();
+    const project: TodoProject = { id: randomUUID(), title: cleanTitle, createdAt: new Date().toISOString() };
+    settings.projects = [...settings.projects, project];
+    settings.activeProjectId = project.id;
+    await storage.saveSettings(settings);
+    broadcastState();
+    return currentState();
+  });
+
+  ipcMain.handle('project:update', async (_event, projectId: string, title: string) => {
+    const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!cleanTitle) return currentState();
+    settings.projects = settings.projects.map((project) => project.id === projectId ? { ...project, title: cleanTitle } : project);
+    await storage.saveSettings(settings);
+    broadcastState();
+    return currentState();
+  });
+
+  ipcMain.handle('task:move', async (_event, taskId: string, projectId: string) => {
+    if (projectId && !settings.projects.some((project) => project.id === projectId)) throw new Error('目标项目不存在');
+    const task = tasks.find((item) => item.id === taskId);
+    if (task) task.projectId = projectId || undefined;
+    await persistTasksAndBroadcast();
+    return currentState();
+  });
+
+  ipcMain.handle('project:delete', async (_event, projectId: string, deleteTasks = false) => {
+    if (!settings.projects.some((project) => project.id === projectId)) return currentState();
+    tasks = deleteTasks
+      ? tasks.filter((task) => task.projectId !== projectId)
+      : tasks.map((task) => task.projectId === projectId ? { ...task, projectId: undefined } : task);
+    await persistTasksAndBroadcast();
+    settings.projects = settings.projects.filter((project) => project.id !== projectId);
+    if (settings.activeProjectId === projectId) settings.activeProjectId = '';
+    await storage.saveSettings(settings);
+    broadcastState();
     return currentState();
   });
 
@@ -788,7 +962,15 @@ function setupIpcHandlers() {
 
     if (partial.todoFilePath && partial.todoFilePath !== prevTodoPath) {
       await storage.ensureTodoFile(settings.todoFilePath);
-      tasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+      const nextTasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+      if (nextTasks.length === 0 && tasks.length > 0) {
+        await storage.writeTasks(settings.todoFilePath, tasks);
+      } else {
+        tasks = nextTasks;
+      }
+      if (recoverMissingProjects()) {
+        await storage.saveSettings(settings);
+      }
       storage.watchTodoFile(settings.todoFilePath);
     }
 
@@ -803,6 +985,9 @@ function setupIpcHandlers() {
     try {
       await syncService.sync(settings.todoFilePath);
       tasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+      if (recoverMissingProjects()) {
+        await storage.saveSettings(settings);
+      }
       broadcastState();
       return {
         ok: true,
@@ -830,6 +1015,9 @@ async function bootstrap() {
   settings.showCodexUsage = typeof settings.showCodexUsage === 'boolean' ? settings.showCodexUsage : false;
   settings.language = normalizeLocalePreference(settings.language);
   settings.windowBounds = normalizeWindowBounds(settings.windowBounds) ?? undefined;
+  settings.projects = Array.isArray(settings.projects) ? settings.projects : [];
+  settings.activeProjectId = typeof settings.activeProjectId === 'string' ? settings.activeProjectId : '';
+  settings.workspaceView = settings.workspaceView === 'all' ? 'all' : 'focus';
   if (settings.desktopPinned) {
     settings.alwaysOnTop = false;
   } else {
@@ -837,6 +1025,9 @@ async function bootstrap() {
   }
   await storage.saveSettings(settings);
   tasks = normalizeTaskOrder(await storage.readTasks(settings.todoFilePath));
+  if (recoverMissingProjects()) {
+    await storage.saveSettings(settings);
+  }
   storage.watchTodoFile(settings.todoFilePath);
 
   setupIpcHandlers();
@@ -879,7 +1070,7 @@ if (!gotSingleInstanceLock) {
       await bootstrap();
     } catch (error) {
       const message = (error as Error).message || String(error);
-      console.error('ApexTodo 启动失败:', error);
+      console.error('Just Do It 启动失败:', error);
       dialog.showErrorBox(t('startup.failedTitle'), t('startup.failedBody', { message }));
       app.quit();
       return;
@@ -896,6 +1087,7 @@ if (!gotSingleInstanceLock) {
 }
 
 app.on('will-quit', () => {
+  codexTasks.stopAll();
   if (saveWindowBoundsTimer) {
     clearTimeout(saveWindowBoundsTimer);
     saveWindowBoundsTimer = null;
@@ -913,3 +1105,4 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+

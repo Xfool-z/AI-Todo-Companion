@@ -6,11 +6,20 @@ declare global {
   interface Window {
     todoApi: {
       getState: () => Promise<AppState>;
+      startCodexTask: (taskId: string) => Promise<AppState>;
+      stopCodexTask: (taskId: string) => Promise<void>;
       getCodexUsage: () => Promise<CodexUsage>;
       addTask: (text: string) => Promise<AppState>;
+      addTaskToProject: (text: string, projectId?: string) => Promise<AppState>;
+      batchAddTasks: (entries: Array<{ text: string; completed: boolean }>, projectId?: string) => Promise<AppState>;
       toggleTask: (taskId: string, completed: boolean) => Promise<AppState>;
       deleteTask: (taskId: string) => Promise<AppState>;
       updateTaskText: (taskId: string, text: string) => Promise<AppState>;
+      updateTaskComment: (taskId: string, comment: string) => Promise<AppState>;
+      addProject: (title: string) => Promise<AppState>;
+      updateProject: (projectId: string, title: string) => Promise<AppState>;
+      deleteProject: (projectId: string, deleteTasks?: boolean) => Promise<AppState>;
+      moveTask: (taskId: string, projectId: string) => Promise<AppState>;
       reorderOpenTasks: (orderedOpenIds: string[]) => Promise<AppState>;
       captureTask: () => Promise<CaptureResult>;
       updateSettings: (partial: Partial<AppSettings>) => Promise<AppState>;
@@ -20,6 +29,8 @@ declare global {
       runSync: () => Promise<{ ok: boolean; message: string }>;
       minimizeWindow: () => Promise<void>;
       closeWindow: () => Promise<void>;
+      expandWindow: () => Promise<void>;
+      copyText: (text: string) => Promise<void>;
       onStateUpdated: (handler: (state: AppState) => void) => () => void;
       onSavedToast: (handler: (payload: SaveToastPayload) => void) => () => void;
       onOpenSettingsPanel: (handler: () => void) => () => void;
@@ -28,3 +39,4 @@ declare global {
 }
 
 export {};
+
