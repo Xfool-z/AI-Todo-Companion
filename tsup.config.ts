@@ -3,6 +3,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig((options) => ({
   entry: {
     main: 'src/main/main.ts',
+    codexTasks: 'src/main/codexTasks.ts',
     codexUsage: 'src/main/codexUsage.ts',
     batchImport: 'src/main/batchImport.ts',
     markdown: 'src/main/markdown.ts',
@@ -23,3 +24,4 @@ export default defineConfig((options) => ({
   clean: !options.watch,
   splitting: false
 }));
+

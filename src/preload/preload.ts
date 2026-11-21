@@ -3,6 +3,8 @@ import { AppSettings, AppState, CaptureResult, CodexUsage, SaveToastPayload } fr
 
 const api = {
   getState: () => ipcRenderer.invoke('app:get-state') as Promise<AppState>,
+  startCodexTask: (taskId: string) => ipcRenderer.invoke('codex:start-task', taskId) as Promise<AppState>,
+  stopCodexTask: (taskId: string) => ipcRenderer.invoke('codex:stop', taskId) as Promise<void>,
   getCodexUsage: () => ipcRenderer.invoke('codex:get-usage') as Promise<CodexUsage>,
   addTask: (text: string) => ipcRenderer.invoke('task:add', text) as Promise<AppState>,
   addTaskToProject: (text: string, projectId?: string) => ipcRenderer.invoke('task:add-to-project', text, projectId) as Promise<AppState>,

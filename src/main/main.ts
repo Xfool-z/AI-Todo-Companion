@@ -16,6 +16,8 @@ import { createTaskFromText } from './markdown';
 import { getCodexUsage } from './codexUsage';
 import { StorageService } from './storage';
 import { WebDavSyncService } from './sync';
+import { CodexTaskService } from './codexTasks';
+import { CodexTaskRun } from '../shared/types';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_SHORTCUT = 'CommandOrControl+Shift+A';
@@ -33,6 +35,19 @@ let statusMessage: LocalizedMessage | undefined;
 let saveWindowBoundsTimer: NodeJS.Timeout | null = null;
 let tray: Tray | null = null;
 let showWindowAfterBootstrap = false;
+const codexRuns = new Map<string, CodexTaskRun>();
+const codexTasks = new CodexTaskService(run => {
+  codexRuns.set(run.taskId, run);
+  broadcastState();
+}, async description => {
+  showMainWindow();
+  if (!mainWindow) return false;
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'question', title: 'Codex 操作确认', message: '允许 Codex 执行此操作？',
+    detail: description, buttons: ['拒绝', '允许本次'], defaultId: 0, cancelId: 0
+  });
+  return result.response === 1;
+});
 
 const storage = new StorageService((nextTasks) => {
   tasks = normalizeTaskOrder(nextTasks);
@@ -151,6 +166,7 @@ function recoverMissingProjects() {
 
 function currentState(): AppState {
   return {
+    codexRuns: [...codexRuns.values()],
     tasks,
     settings,
     lastSyncTime,
@@ -679,6 +695,29 @@ function showFloatingBall() {
 }
 
 function setupIpcHandlers() {
+  ipcMain.handle('codex:stop', (_event, taskId: string) => codexTasks.stop(taskId));
+  ipcMain.handle('codex:start-task', async (_event, taskId: string) => {
+    const task = tasks.find(item => item.id === taskId);
+    if (!task || !mainWindow) throw new Error('任务不存在');
+    const previous = codexRuns.get(taskId);
+    if (previous && ['starting', 'running', 'approval'].includes(previous.status)) throw new Error('此任务正在执行');
+    const folder = await dialog.showOpenDialog(mainWindow, { title: '选择 Codex 工作文件夹', properties: ['openDirectory'] });
+    if (folder.canceled || !folder.filePaths[0]) return currentState();
+    let binary = '';
+    try {
+      const result = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$c=Get-Command codex -ErrorAction SilentlyContinue; if($c -and $c.Source.EndsWith('.exe')){$c.Source}else{$p=Get-AppxPackage OpenAI.Codex | Select-Object -First 1; if($p){Join-Path $p.InstallLocation 'app\\resources\\codex.exe'}}"], { windowsHide: true });
+      binary = result.stdout.trim();
+    } catch { /* Offer an executable picker when automatic detection is unavailable. */ }
+    if (!binary) {
+      const picker = await dialog.showOpenDialog(mainWindow, { title: '选择已安装的 codex.exe（请先在 Codex 中登录）', properties: ['openFile'], filters: [{ name: 'Codex', extensions: ['exe'] }] });
+      if (picker.canceled || !picker.filePaths[0]) return currentState();
+      binary = picker.filePaths[0];
+    }
+    const project = settings.projects.find(item => item.id === task.projectId);
+    const prompt = [`项目：${project?.title || '独立任务'}`, `任务：${task.text}`, task.comment ? `备注：${task.comment}` : '', '请开始处理此任务，说明执行结果与验证方法。完成后等待用户验证，不自动标记待办完成。'].filter(Boolean).join('\n\n');
+    codexTasks.start(binary, folder.filePaths[0], taskId, prompt);
+    return currentState();
+  });
   ipcMain.handle('app:get-state', async () => currentState());
   ipcMain.handle('codex:get-usage', async () => getCodexUsage(getResolvedLocale()));
   ipcMain.handle('window:minimize', () => {
@@ -1048,6 +1087,7 @@ if (!gotSingleInstanceLock) {
 }
 
 app.on('will-quit', () => {
+  codexTasks.stopAll();
   if (saveWindowBoundsTimer) {
     clearTimeout(saveWindowBoundsTimer);
     saveWindowBoundsTimer = null;

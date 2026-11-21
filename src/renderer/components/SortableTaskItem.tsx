@@ -14,10 +14,11 @@ interface Props {
   onUpdateComment: (id: string, comment: string) => void;
   projectTitle?: string;
   projectControl?: React.ReactNode;
+  onTaskActions: (task: TodoItem) => void;
   locale: SupportedLocale;
 }
 
-export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpdateComment, projectTitle, projectControl, locale }: Props) {
+export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpdateComment, projectTitle, projectControl, onTaskActions, locale }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const [isEditing, setIsEditing] = useState(false);
   const [draftText, setDraftText] = useState(task.text);
@@ -75,6 +76,10 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
   return (
     <div
       ref={setNodeRef}
+      onContextMenu={(event) => {
+        if ((event.target as HTMLElement).closest('input,textarea,select')) return;
+        event.preventDefault(); onTaskActions(task);
+      }}
       style={style}
       className={`group flex items-center gap-2.5 rounded-lg border px-3 py-3 transition-colors duration-150 ${
         isDragging
@@ -177,6 +182,7 @@ export function SortableTaskItem({ task, onToggle, onDelete, onUpdateText, onUpd
             {timeLabel}
           </span>
           <div className="flex flex-shrink-0 items-center gap-0.5">
+          <button className="ghost-icon !h-7 !w-7" title="任务操作" onClick={() => onTaskActions(task)}>⋯</button>
           <button
             {...attributes}
             {...listeners}

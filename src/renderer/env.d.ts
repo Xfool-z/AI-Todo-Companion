@@ -6,6 +6,8 @@ declare global {
   interface Window {
     todoApi: {
       getState: () => Promise<AppState>;
+      startCodexTask: (taskId: string) => Promise<AppState>;
+      stopCodexTask: (taskId: string) => Promise<void>;
       getCodexUsage: () => Promise<CodexUsage>;
       addTask: (text: string) => Promise<AppState>;
       addTaskToProject: (text: string, projectId?: string) => Promise<AppState>;

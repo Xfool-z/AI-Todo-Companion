@@ -207,6 +207,8 @@ export default function App() {
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
   const [deleteProjectTasks, setDeleteProjectTasks] = useState(false);
   const [aiTaskIds, setAiTaskIds] = useState<string[] | null>(null);
+  const [actionTaskId, setActionTaskId] = useState<string | null>(null);
+  const [sendingCodex, setSendingCodex] = useState(false);
   const [aiGoal, setAiGoal] = useState('请逐项制定执行计划，说明结果与验证方法。执行结束后请等待我验证，再确认任务完成。');
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
@@ -629,6 +631,8 @@ export default function App() {
   }
 
   const aiTasks = (state?.tasks || []).filter((task) => aiTaskIds?.includes(task.id));
+  const actionTask = state?.tasks.find((task) => task.id === actionTaskId);
+  const actionRun = state?.codexRuns?.find((run) => run.taskId === actionTaskId);
   const aiPackage = ['# Just Do It 工作任务包', '', '## 期望结果', aiGoal, '', '## 任务', ...aiTasks.flatMap((task) => [
     `- [${task.completed ? 'x' : ' '}] ${task.text}`,
     `  项目：${state?.settings.projects.find((project) => project.id === task.projectId)?.title || '独立任务'}`,
@@ -646,7 +650,7 @@ export default function App() {
         <header className="flex h-10 flex-shrink-0 items-center justify-between px-3" style={dragStyle}>
           <div className="flex items-center gap-2">
             <ApexLogo size={20} />
-            <span className="text-[13px] font-semibold tracking-wide">Just Do It</span>
+            <span className="text-[13px] font-semibold tracking-wide">Just Do It <small className="text-[var(--text-3)]">0.2.1 试用</small></span>
             {state?.settings.desktopPinned && (
               <span className="h-2 w-2 rounded-full bg-[var(--success)]" title={t('window.pinned')} />
             )}
@@ -786,6 +790,7 @@ export default function App() {
                     onDelete={deleteTask}
                     onUpdateText={updateTaskText}
                     onUpdateComment={updateTaskComment}
+                    onTaskActions={(task) => setActionTaskId(task.id)}
                     projectControl={projectControl(task)}
                     projectTitle={workspaceView === 'all' ? state?.settings.projects.find((project) => project.id === task.projectId)?.title || '独立任务' : undefined}
                     locale={locale}
@@ -826,6 +831,7 @@ export default function App() {
                   {completedTasks.map((task: TodoItem) => (
                     <div
                       key={task.id}
+                      onContextMenu={(event) => { event.preventDefault(); setActionTaskId(task.id); }}
                       className="flex items-center gap-2.5 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 transition-colors hover:border-[var(--line-strong)] hover:bg-[var(--surface-2)]"
                     >
                       <button
@@ -839,6 +845,7 @@ export default function App() {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] leading-[18px] text-[var(--text-3)] line-through">{task.text}</p>
                         {projectControl(task)}
+                        <button className="ghost-text !py-1" onClick={() => setActionTaskId(task.id)}>⋯ 任务操作</button>
                         {task.comment && <p className="mt-1 line-clamp-2 text-[11px] text-[var(--text-3)]">{task.comment}</p>}
                       </div>
                       <span
@@ -880,6 +887,27 @@ export default function App() {
             try { await window.todoApi.copyText(aiPackage); setAiTaskIds(null); notifyError('任务包已复制，可粘贴到 AI 对话'); }
             catch { notifyError('复制失败，请重试'); }
           }}>复制 {aiTasks.length} 条任务</button>
+        </div>}
+        {actionTask && <div role="dialog" aria-label="任务操作" className="absolute inset-0 z-50 flex flex-col gap-3 overflow-auto bg-[var(--bg)] p-4" style={noDragStyle}>
+          <div className="flex items-center justify-between"><strong className="break-words">{actionTask.text}</strong><button className="ghost-text" onClick={() => setActionTaskId(null)}>关闭</button></div>
+          <button className="btn-primary" onClick={async () => {
+            const prompt = [`项目：${state?.settings.projects.find(p => p.id === actionTask.projectId)?.title || '独立任务'}`, `任务：${actionTask.text}`, actionTask.comment ? `备注：${actionTask.comment}` : ''].filter(Boolean).join('\n\n');
+            try { await window.todoApi.copyText(prompt); notifyError('任务与备注已复制'); }
+            catch { notifyError('复制失败'); }
+          }}>复制任务</button>
+          <button className="btn-primary" disabled={sendingCodex || Boolean(actionRun && ['starting', 'running', 'approval'].includes(actionRun.status))} onClick={async () => {
+            setSendingCodex(true);
+            try { setState(await window.todoApi.startCodexTask(actionTask.id)); }
+            catch (error) { notifyError(String(error instanceof Error ? error.message : 'Codex 启动失败')); }
+            finally { setSendingCodex(false); }
+          }}>{sendingCodex ? '正在连接…' : '发送给 Codex，新建对话并开始'}</button>
+          <p className="text-xs text-[var(--text-2)]">选择工作文件夹后，使用本机已登录的 Codex 执行。退出 Just Do It 会停止本次运行；会话编号可用于后续查找。</p>
+          {actionRun && <>
+            <p className="text-xs">状态：{{ starting: '连接中', running: '执行中', approval: '等待授权', review: '待验证', failed: '未完成' }[actionRun.status]}</p>
+            <p className="break-all text-xs">工作目录：{actionRun.cwd}<br />会话：{actionRun.threadId || '尚未创建'}</p>
+            <textarea className="field min-h-48 flex-1 text-xs" readOnly aria-label="Codex 执行结果" value={actionRun.output || '正在等待 Codex 返回内容…'} />
+            {['starting', 'running', 'approval'].includes(actionRun.status) && <button className="ghost-text" onClick={() => void window.todoApi.stopCodexTask(actionTask.id)}>停止执行</button>}
+          </>}
         </div>}
 
         {batchOpen && (

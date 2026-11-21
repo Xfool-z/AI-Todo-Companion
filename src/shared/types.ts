@@ -54,11 +54,20 @@ export interface AppSettings {
 }
 
 export interface AppState {
+  codexRuns?: CodexTaskRun[];
   tasks: TodoItem[];
   settings: AppSettings;
   lastSyncTime?: string;
   syncMessage?: string;
   resolvedLocale: SupportedLocale;
+}
+
+export interface CodexTaskRun {
+  taskId: string;
+  cwd: string;
+  threadId?: string;
+  status: 'starting' | 'running' | 'approval' | 'review' | 'failed';
+  output: string;
 }
 
 export interface SaveToastPayload {
